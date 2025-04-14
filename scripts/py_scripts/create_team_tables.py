@@ -33,13 +33,14 @@ wnba_teams = {
     "Sacramento Monarchs",
     "Miami Sol",
     "Portland Fire",
+    "Las Vegas Aces",
     "Utah Starzz",
     "San Antonio Silver Stars",
     "San Antonio Stars",
     "Detroit Shock",
     "Tulsa Shock",
-    "Orlando Miracle"
-    #"Golden State Valkyries"
+    "Orlando Miracle",
+    "Golden State Valkyries"
 }
 
 # A set that holds all data points we care about against each team
@@ -59,6 +60,7 @@ against_all_teams_data_points = {
 
 # Template for creating a table with 34 configurable columns
 base_columns = [
+    "Year",
     "Win_Loss_Szn REAL",
     "Avr_Pts_Home REAL" ,
     "Avr_Pts_Away REAL",
