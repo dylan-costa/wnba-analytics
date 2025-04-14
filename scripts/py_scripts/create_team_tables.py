@@ -6,8 +6,8 @@ db_path = '../../wnba_stats.db'
 
 # Delete the existing database file if it exists
 if os.path.exists(db_path):
-    os.remove(db_path)
-    print(f"Deleted existing database at {os.path.abspath(db_path)}")
+    #os.remove(db_path)
+    print(f"Database file already exists at {os.path.abspath(db_path)}, please manually delete the .db file to recreate.")
 
 print(f"Connecting to database at: {os.path.abspath(db_path)}")
 
@@ -60,7 +60,7 @@ against_all_teams_data_points = {
 
 # Template for creating a table with 34 configurable columns
 base_columns = [
-    "Year",
+    "Year INTEGER",
     "Win_Loss_Szn REAL",
     "Avr_Pts_Home REAL" ,
     "Avr_Pts_Away REAL",
