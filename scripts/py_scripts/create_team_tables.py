@@ -4,9 +4,8 @@ import sqlite3
 # Connect to SQLite database (it will create the database if it doesn't exist)
 db_path = '../../wnba_stats.db'
 
-# Delete the existing database file if it exists
+# Prevent a user from overwriting the .db file if they re-run this script
 if os.path.exists(db_path):
-    #os.remove(db_path)
     print(f"Database file already exists at {os.path.abspath(db_path)}, please manually delete the .db file to recreate.")
 
 print(f"Connecting to database at: {os.path.abspath(db_path)}")
@@ -76,7 +75,7 @@ base_columns = [
 def create_tables():
     for team in sorted(wnba_teams):
         # Clean the team name to use as a table name (replace spaces with underscores)
-        table_name = team.replace(" ", "_").replace("/", "_")  # Replace spaces and slashes
+        table_name = team.replace(" ", "_")  # Replace spaces
         
         # Copy the base columns into a new list
         column_template = base_columns.copy()
@@ -85,7 +84,7 @@ def create_tables():
         # for each team (11 data points * 22 teams = 242 additional columns added to the 9 base columns)
         for opponent in wnba_teams:
             if opponent != team:
-                opponent_clean = opponent.replace(" ", "_").replace("/", "_")
+                opponent_clean = opponent.replace(" ", "_")
                 for point in against_all_teams_data_points:
                     column_template.append(f"{point}{opponent_clean} REAL")
 
