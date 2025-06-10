@@ -44,17 +44,18 @@ wnba_teams = {
 
 # A set that holds all data points we care about against each team
 against_all_teams_data_points = {
-    "Win_Loss_Vs_",
-    "Avr_Win_Margin_Home_Vs_",
-    "Avr_Win_Margin_Away_Vs_", 
-    "Avr_Pts_Scored_Home_Vs_", 
-    "Avr_Pts_Scored_Away_Vs_",
+    "Avr_Pts_Scored_Home_Vs_",
     "Avr_Pts_Allowed_Home_Vs_",
+    "Avr_Fg_Per_Home_Vs_",
+    "Avr_Three_Pt_Per_Home_Vs_",
+    "Avr_Win_Margin_Home_Vs_",
+    "Win_Loss_Home_Vs_",
+    "Avr_Pts_Scored_Away_Vs_",
     "Avr_Pts_Allowed_Away_Vs_",
-    "Fg_Per_Home_Vs_",
-    "Fg_Per_Away_Vs_",
-    "Three_Pt_Per_Home_Vs_",
-    "Three_Pt_Per_Away_Vs_"
+    "Avr_Fg_Per_Away_Vs_",
+    "Avr_Three_Pt_Per_Away_Vs_",
+    "Avr_Win_Margin_Away_Vs_",
+    "Win_Loss_Away_Vs_"
 }
 
 # Template for creating a table with 34 configurable columns
