@@ -25,7 +25,7 @@ wnba_teams = {
     "Seattle Storm",
     "Cleveland Rockers",
     "Charlotte Sting",
-    "Huston Comets",
+    "Houston Comets",
     "Sacramento Monarchs",
     "Miami Sol",
     "Portland Fire",
