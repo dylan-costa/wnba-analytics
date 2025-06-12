@@ -8,37 +8,6 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-# Set of all current and historical WNBA teams
-# TODO: Since this list appears in a few scripts now, we might want this list to be in its own
-# file that we then import by the scripts that require it
-wnba_teams = {
-    "Atlanta Dream",
-    "Chicago Sky",
-    "Connecticut Sun",
-    "Indiana Fever",
-    "New York Liberty",
-    "Washington Mystics",
-    "Dallas Wings",
-    "Los Angeles Sparks",
-    "Minnesota Lynx",
-    "Phoenix Mercury",
-    "Seattle Storm",
-    "Cleveland Rockers",
-    "Charlotte Sting",
-    "Houston Comets",
-    "Sacramento Monarchs",
-    "Miami Sol",
-    "Portland Fire",
-    "Las Vegas Aces",
-    "Utah Starzz",
-    "San Antonio Silver Stars",
-    "San Antonio Stars",
-    "Detroit Shock",
-    "Tulsa Shock",
-    "Orlando Miracle",
-    "Golden State Valkyries"
-}
-
 # The fields we're interested in keeping track of from the schedule csv's at ~/wnba_stats/schedules/csv 
 TRACKED_COLUMNS = [
     'HOME_TEAM_NAME', 'HOME_PTS', 'HOME_FG_PCT', 'HOME_FG3_PCT', 'HOME_PLUS_MINUS', 'HOME_WL',
