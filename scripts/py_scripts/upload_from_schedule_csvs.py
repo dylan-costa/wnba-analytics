@@ -59,19 +59,19 @@ class TeamResults:
         self.winForTeamBeingConsidered = winForTeamBeingConsidered
         self.numGamesPlayedAgainst = numGamesPlayedAgainst
 
-    def __str__(self):
-        return (
-            f"Team Being Considered: {self.teamBeingConsidered}\n"
-            f"Opponent: {self.opponent}\n"
-            f"Season Year: {self.year}\n"
-            f"Points The Team Being Considered Scored: {self.ptsForTeamBeingConsidered}\n"
-            f"Points The Opponent Scored: {self.ptsForOppBeingConsidered}\n"
-            f"FG% for The Team Being Considered: {self.fgPctForTeamBeingConsidered}\n"
-            f"3PT% for The Team Being Considered: {self.threePctForTeamBeingConsidered}\n"
-            f"Plus/Minus of The Team Being Considered: {self.plusMinusForTeamBeingConsidered}\n"
-            f"Num Wins or W/L Ratio for the Team Being Considered: {self.winForTeamBeingConsidered}\n"
-            f"Games Played Against Opponent: {self.numGamesPlayedAgainst}"
-        )
+    # def __str__(self):
+    #     return (
+    #         f"Team Being Considered: {self.teamBeingConsidered}\n"
+    #         f"Opponent: {self.opponent}\n"
+    #         f"Season Year: {self.year}\n"
+    #         f"Points The Team Being Considered Scored: {self.ptsForTeamBeingConsidered}\n"
+    #         f"Points The Opponent Scored: {self.ptsForOppBeingConsidered}\n"
+    #         f"FG% for The Team Being Considered: {self.fgPctForTeamBeingConsidered}\n"
+    #         f"3PT% for The Team Being Considered: {self.threePctForTeamBeingConsidered}\n"
+    #         f"Plus/Minus of The Team Being Considered: {self.plusMinusForTeamBeingConsidered}\n"
+    #         f"Num Wins or W/L Ratio for the Team Being Considered: {self.winForTeamBeingConsidered}\n"
+    #         f"Games Played Against Opponent: {self.numGamesPlayedAgainst}"
+    #     )
 
 # This function's only purpose was to get the TRACKED_COLUMNS list above
 def get_column_mapping(csv_file_path):
@@ -239,7 +239,15 @@ def createSeasonData(game_data):
             winsAndGamesPlayed[opponent][0] += away_win_val
             winsAndGamesPlayed[opponent][1] += 1
 
-
+    for key,value in homeTeamSeasonData.items():
+        print("HI")
+        print(key)
+        print()
+        for x in value:
+            print(x.homeTeam)
+            print(x.opponent)
+            print(x.numGamesPlayedAgainst)
+        #print(homeTeamSeasonData['New York Liberty'].__dict__)
     return homeTeamSeasonData, awayTeamSeasonData, winsAndGamesPlayed
 
 # This function will calculate the average stats for each home team 

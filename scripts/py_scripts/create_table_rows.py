@@ -1,7 +1,7 @@
 import sqlite3
 
 # Connect to SQLite3 database (it will create the database file if it doesn't exist)
-conn = sqlite3.connect('wnba_stats.db')  # Change the database name if needed
+conn = sqlite3.connect('../../wnba_stats.db')  # Change the database name if needed
 cursor = conn.cursor()
 
 # make a dictionary that maps the years in the wnba to the team (including this year which will have no data currently)
