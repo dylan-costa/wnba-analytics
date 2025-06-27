@@ -907,5 +907,6 @@ if __name__ == "__main__":
         #     print(f"\t{wl_ratio_data[entry]}")
         #     print("\n")
 
+
         # Write data to database
         uploadToDb(home_averaged_season_data, away_averaged_season_data, pts_scored_home_average_season_data, pts_scored_away_average_season_data, pts_allowed_home_average_season_data, pts_allowed_away_average_season_data, fg_per_home_average_seasson_data, fg_per_away_average_season_data, three_pt_per_home_average_season_data, three_pt_per_away_average_season_data, wl_ratio_data)
