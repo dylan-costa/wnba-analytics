@@ -55,7 +55,7 @@ class TeamResults:
         self.ptsForOppBeingConsidered = ptsForOppBeingConsidered
         self.fgPctForTeamBeingConsidered = fgPctForTeamBeingConsidered
         self.threePctForTeamBeingConsidered = threePctForTeamBeingConsidered
-        self.plusMinusForTeamBeingConsidered = float(plusMinusForTeamBeingConsidered)
+        self.plusMinusForTeamBeingConsidered = plusMinusForTeamBeingConsidered
         self.winForTeamBeingConsidered = winForTeamBeingConsidered
         self.numGamesPlayedAgainst = numGamesPlayedAgainst
 
@@ -131,6 +131,14 @@ def process_csv_data(csv_file_path, column_map):
 def createSeasonData(game_data):
     homeTeamSeasonData = {}
     awayTeamSeasonData = {}
+    ptsScoredHome = {}
+    ptsScoredAway = {}
+    ptsAllowedHome = {}
+    ptsAllowedAway = {}
+    fgPerHome = {}
+    fgPerAway = {}
+    threePtPerHome = {}
+    threePtPerAway = {}
     winsAndGamesPlayed = {}
 
     # Get the Home and Away teams from the current row being considered in the game_data object
@@ -226,6 +234,58 @@ def createSeasonData(game_data):
             else:
                 awayTeamSeasonData[opponent].append(new_away_result)
 
+        # Store total points scored at home and away for each team and total games
+        if home_team not in ptsScoredHome:
+            ptsScoredHome[home_team] = [home_pts, 1]
+        else:
+            ptsScoredHome[home_team][0] += home_pts
+            ptsScoredHome[home_team][1] += 1
+
+        if opponent not in ptsScoredAway:
+            ptsScoredAway[opponent] = [away_pts, 1]
+        else:
+            ptsScoredAway[opponent][0] += away_pts
+            ptsScoredAway[opponent][1] += 1
+
+        # Store total points allowed at home and away for each team and total games
+        if home_team not in ptsAllowedHome:
+            ptsAllowedHome[home_team] = [away_pts, 1]
+        else:
+            ptsAllowedHome[home_team][0] += away_pts
+            ptsAllowedHome[home_team][1] += 1
+
+        if opponent not in ptsAllowedAway:
+            ptsAllowedAway[opponent] = [home_pts, 1]
+        else:
+            ptsAllowedAway[opponent][0] += home_pts
+            ptsAllowedAway[opponent][1] += 1
+
+        # Store home and away fg percentage and total games
+        if home_team not in fgPerHome:
+            fgPerHome[home_team] = [home_fg_pct, 1]
+        else:
+            fgPerHome[home_team][0] += home_fg_pct
+            fgPerHome[home_team][1] += 1
+
+        if opponent not in fgPerAway:
+            fgPerAway[opponent] = [away_fg_pct, 1]
+        else:
+            fgPerAway[opponent][0] += away_fg_pct
+            fgPerAway[opponent][1] += 1
+
+        # Store home and away three pt. percentage and total games
+        if home_team not in threePtPerHome:
+            threePtPerHome[home_team] = [home_three_pct, 1]
+        else:
+            threePtPerHome[home_team][0] += home_three_pct
+            threePtPerHome[home_team][1] += 1
+
+        if opponent not in threePtPerAway:
+            threePtPerAway[opponent] = [away_three_pct, 1]
+        else:
+            threePtPerAway[opponent][0] += away_three_pct
+            threePtPerAway[opponent][1] += 1
+
         # Store the number of wins and number of games played for each team in a season
         if home_team not in winsAndGamesPlayed:
             winsAndGamesPlayed[home_team] = [home_win_val, 1]
@@ -240,14 +300,22 @@ def createSeasonData(game_data):
             winsAndGamesPlayed[opponent][1] += 1
 
 
-    return homeTeamSeasonData, awayTeamSeasonData, winsAndGamesPlayed
+    return homeTeamSeasonData, awayTeamSeasonData, ptsScoredHome, ptsScoredAway, ptsAllowedHome, ptsAllowedAway, fgPerHome, fgPerAway, threePtPerHome, threePtPerAway, winsAndGamesPlayed
 
 # This function will calculate the average stats for each home team 
 # against each opponent.  Once this is done, insertion into the DB 
 # can begin, see the 'uploadToDb' function below
-def averageSeasonData(home_season_data, away_season_data, wl_season_data):
+def averageSeasonData(home_season_data, away_season_data, ptsScoredHome, ptsScoredAway, ptsAllowedHome, ptsAllowedway, fgPerHome, fgPerAway, threePtPerHome, threePtPerAway, wl_season_data):
     home_averaged_data = {}
     away_averaged_data = {}
+    pts_scored_home_average_data = {}
+    pts_scored_away_average_data = {}
+    pts_allowed_home_average_data = {}
+    pts_allowed_away_average_data = {}
+    fg_per_home_average_data = {}
+    fg_per_away_average_data = {}
+    three_pt_per_home_average_data = {}
+    three_pt_per_away_average_data = {}
     wl_ratio_data = {}
 
     for team, game_results in home_season_data.items():
@@ -294,17 +362,57 @@ def averageSeasonData(home_season_data, away_season_data, wl_season_data):
 
         away_averaged_data[team] = averaged_results
 
+    # Find the average points scored at home for all teams for the season
+    for team in ptsScoredHome:
+        points_home = ptsScoredHome[team][0] / ptsScoredHome[team][1]
+        pts_scored_home_average_data[team] = points_home
+
+    # Find the average points scored away for all teams for the season
+    for team in ptsScoredAway:
+        points_away = ptsScoredAway[team][0] / ptsScoredAway[team][1]
+        pts_scored_away_average_data[team] = points_away
+
+    # Find the average points allowed at home for all teams for the season
+    for team in ptsAllowedHome:
+        points_allowed_home = ptsAllowedHome[team][0] / ptsAllowedHome[team][1]
+        pts_allowed_home_average_data[team] = points_allowed_home
+
+    # Find the average points allowed away for all teams for the season
+    for team in ptsAllowedway:
+        points_allowed_away = ptsAllowedway[team][0] / ptsAllowedway[team][1]
+        pts_allowed_away_average_data[team] = points_allowed_away
+
+    # Find the average FG percentage at home for all teams for the season
+    for team in fgPerHome:
+        fg_per_home = fgPerHome[team][0] / fgPerHome[team][1]
+        fg_per_home_average_data[team] = fg_per_home
+
+    # Find the average FG percentage away for all teams for the season
+    for team in fgPerAway:
+        fg_per_away = fgPerAway[team][0] / fgPerAway[team][1]
+        fg_per_away_average_data[team] = fg_per_away
+
+    # Find the average 3 point percentage at home for all teams for the season
+    for team in threePtPerHome:
+        three_pt_per_home = threePtPerHome[team][0] / threePtPerHome[team][1]
+        three_pt_per_home_average_data[team] = three_pt_per_home
+
+    # Find the average 3 point percentage away for all teams for the season
+    for team in threePtPerAway:
+        three_pt_per_away = threePtPerAway[team][0] / threePtPerAway[team][1]
+        three_pt_per_away_average_data[team] = three_pt_per_away
+
     # Find the season W/L Ratio for all teams
     for team in wl_season_data:
         wl_ratio = wl_season_data[team][0] / wl_season_data[team][1]
         wl_ratio_data[team] = wl_ratio
 
-    return home_averaged_data, away_averaged_data, wl_ratio_data
+    return home_averaged_data, away_averaged_data, pts_scored_home_average_data, pts_scored_away_average_data, pts_allowed_home_average_data, pts_allowed_away_average_data, fg_per_home_average_data, fg_per_away_average_data, three_pt_per_home_average_data, three_pt_per_away_average_data, wl_ratio_data
 
 # Function that will parse the averaged_season_data object and write all applicable data points per table name (HOME_TEAM_NAME)
 # Currently, only Columns that keep track of stats recorded at home, i.e any column whose name is *_Home_Vs_ will have data 
 # written to them.  Updates need to be made to update the away stats 
-def uploadToDb(home_averaged_season_data, away_averaged_season_data, wl_ratio_data):
+def uploadToDb(home_averaged_season_data, away_averaged_season_data, pts_scored_home_average_season_data, pts_scored_away_average_season_data, pts_allowed_home_average_season_data, pts_allowed_away_average_season_data, fg_per_home_average_seasson_data, fg_per_away_average_season_data, three_pt_per_home_average_season_data, three_pt_per_away_average_season_data, wl_ratio_data):
     sznYear = 0
     conn = sqlite3.connect("../../wnba_stats.db")
     cursor = conn.cursor()
@@ -412,6 +520,182 @@ def uploadToDb(home_averaged_season_data, away_averaged_season_data, wl_ratio_da
             except sqlite3.OperationalError as e:
                 print(f"Error inserting/updating {table_name}: {e}")
 
+    # Handle the average points scored at home for each team
+    for team, avg_pts in pts_scored_home_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Avr_Pts_Home column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Avr_Pts_Home REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Avr_Pts_Home row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Avr_Pts_Home = {math.floor(avg_pts * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Avr_Pts_Home for {table_name}: {e}")
+
+    # Handle the average points scored away for each team
+    for team, avg_pts in pts_scored_away_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Avr_Pts_Away column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Avr_Pts_Away REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Avr_Pts_Away row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Avr_Pts_Away = {math.floor(avg_pts * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Avr_Pts_Away for {table_name}: {e}")
+
+    # Handle the average points allowed at home for each team
+    for team, avg_pts_allowed in pts_allowed_home_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Avr_Pts_Allowed_Home column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Avr_Pts_Allowed_Home REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Avr_Pts_Allowed_Home row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Avr_Pts_Allowed_Home = {math.floor(avg_pts_allowed * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Avr_Pts_Allowed_Home for {table_name}: {e}")
+
+    # Handle the average points allowed away for each team
+    for team, avg_pts_allowed in pts_allowed_away_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Avr_Pts_Allowed_Away column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Avr_Pts_Allowed_Away REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Avr_Pts_Allowed_Away row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Avr_Pts_Allowed_Away = {math.floor(avg_pts_allowed * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Avr_Pts_Allowed_Away for {table_name}: {e}")
+
+    # Handle the season FG percentages at home for each team
+    for team, fg_per in fg_per_home_average_seasson_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Fg_Per_Home column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Fg_Per_Home REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Fg_Per_Home row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Fg_Per_Home = {math.floor(fg_per * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Fg_Per_Home for {table_name}: {e}")
+
+    # Handle the season FG percentages away for each team
+    for team, fg_per in fg_per_away_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Fg_Per_Away column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Fg_Per_Away REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Fg_Per_Away row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Fg_Per_Away = {math.floor(fg_per * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Fg_Per_Away for {table_name}: {e}")
+
+    # Handle the season 3 point percentages at home for each team
+    for team, three_pt_fg_per in three_pt_per_home_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Three_Pt_Per_Home column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Three_Pt_Per_Home REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Three_Pt_Per_Home row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Three_Pt_Per_Home = {math.floor(three_pt_fg_per * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Three_Pt_Per_Home for {table_name}: {e}")
+
+    # Handle the season 3 point percentages away for each team
+    for team, three_pt_fg_per in three_pt_per_away_average_season_data.items():
+        table_name = team.replace(" ", "_")
+
+        # Ensure the Three_Pt_Per_Away column exists
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN Three_Pt_Per_Away REAL")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Check if there's already a Three_Pt_Per_Away row (we'll use Year = 0 to flag it)
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE Year = {sznYear}")
+        exists = cursor.fetchone()[0] > 0
+
+        if exists:
+            sql = f"UPDATE {table_name} SET Three_Pt_Per_Away = {math.floor(three_pt_fg_per * 1000) / 1000} WHERE Year = {sznYear}"
+
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError as e:
+            print(f"Error inserting/updating Three_Pt_Per_Away for {table_name}: {e}")
+
     # Handle the season win/loss ratio for each team
     for team, wl_ratio in wl_ratio_data.items():
         table_name = team.replace(" ", "_")
@@ -475,47 +759,154 @@ if __name__ == "__main__":
             print("\n")
 
         # season_data will hold the aggregated data (each team's stats against each opponent throughout the season)
-        home_season_data, away_season_data, wl_season_data = createSeasonData(game_data)
+        home_season_data, away_season_data, ptsScoredHome, ptsScoredAway, ptsAllowedHome, ptsAllowedway, fgPerHome, fgPerAway, threePtPerHome, threePtPerAway, wl_season_data = createSeasonData(game_data)
 
-        for entry in home_season_data:
-            print(entry)
-            for value in home_season_data[entry]:
-                print(value)
+        # for entry in home_season_data:
+        #     print(entry)
+        #     for value in home_season_data[entry]:
+        #         print(value)
+        #     print("\n")
+        # print('--------------------------------')
+        # for entry in away_season_data:
+        #     print(entry)
+        #     for value in away_season_data[entry]:
+        #         print(value)
+        #     print("\n")
+        print('--------------------------------')
+        print('Sum of Points scored at home for each team:')
+        for entry in ptsScoredHome:
+            print(f"{entry}")
+            for value in ptsScoredHome[entry]:
+                print(f"\t{value}")
             print("\n")
         print('--------------------------------')
-        for entry in away_season_data:
-            print(entry)
-            for value in away_season_data[entry]:
-                print(value)
+        print('Sum of Points scored away for each team:')
+        for entry in ptsScoredAway:
+            print(f"{entry}")
+            for value in ptsScoredAway[entry]:
+                print(f"\t{value}")
             print("\n")
         print('--------------------------------')
-        for entry in wl_season_data:
-            print(entry)
-            for value in wl_season_data[entry]:
-                print(value)
+        print('Sum of Points allowed at home for each team:')
+        for entry in ptsAllowedHome:
+            print(f"{entry}")
+            for value in ptsAllowedHome[entry]:
+                print(f"\t{value}")
             print("\n")
+        print('--------------------------------')
+        print('Sum of Points allowed away for each team:')
+        for entry in ptsAllowedway:
+            print(f"{entry}")
+            for value in ptsAllowedway[entry]:
+                print(f"\t{value}")
+            print("\n")
+        # print('--------------------------------')
+        # print('Sum of FG percentages at home:')
+        # for entry in fgPerHome:
+        #     print(f"{entry}")
+        #     for value in fgPerHome[entry]:
+        #         print(f"\t{value}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Sum of FG percentages away:')
+        # for entry in fgPerAway:
+        #     print(f"{entry}")
+        #     for value in fgPerAway[entry]:
+        #         print(f"\t{value}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Sum of 3 point FG percentages at home:')
+        # for entry in threePtPerHome:
+        #     print(f"{entry}")
+        #     for value in threePtPerHome[entry]:
+        #         print(f"\t{value}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Sum of FG percentages away:')
+        # for entry in threePtPerAway:
+        #     print(f"{entry}")
+        #     for value in threePtPerAway[entry]:
+        #         print(f"\t{value}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print("W/L ")
+        # for entry in wl_season_data:
+        #     print(f"{entry}")
+        #     for value in wl_season_data[entry]:
+        #         print(f"\t{value}")
+        #     print("\n")
 
         # averaged_season_data loops through the season_data object and calculates the averages of each team's stats
         # against each opponent. 
-        home_averaged_season_data, away_averaged_season_data, wl_ratio_data = averageSeasonData(home_season_data, away_season_data, wl_season_data)
+        home_averaged_season_data, away_averaged_season_data, pts_scored_home_average_season_data, pts_scored_away_average_season_data, pts_allowed_home_average_season_data, pts_allowed_away_average_season_data, fg_per_home_average_seasson_data, fg_per_away_average_season_data, three_pt_per_home_average_season_data, three_pt_per_away_average_season_data, wl_ratio_data = averageSeasonData(home_season_data, away_season_data, ptsScoredHome, ptsScoredAway, ptsAllowedHome, ptsAllowedway, fgPerHome, fgPerAway, threePtPerHome, threePtPerAway, wl_season_data)
 
+        # print('--------------------------------')
+        # for entry in home_averaged_season_data:
+        #     print(entry)
+        #     for value in home_averaged_season_data[entry]:
+        #         print(value)
+        #     print("\n")
+        # print('--------------------------------')
+        # for entry in away_averaged_season_data:
+        #     print(entry)
+        #     for value in away_averaged_season_data[entry]:
+        #         print(value)
+        #     print("\n")
         print('--------------------------------')
-        for entry in home_averaged_season_data:
+        print('Average points scored at home for each team:')
+        for entry in pts_scored_home_average_season_data:
             print(entry)
-            for value in home_averaged_season_data[entry]:
-                print(value)
+            print(f"\t{pts_scored_home_average_season_data[entry]}")
             print("\n")
         print('--------------------------------')
-        for entry in away_averaged_season_data:
+        print('Average points scored away for each team:')
+        for entry in pts_scored_away_average_season_data:
             print(entry)
-            for value in away_averaged_season_data[entry]:
-                print(value)
+            print(f"\t{pts_scored_away_average_season_data[entry]}")
             print("\n")
         print('--------------------------------')
-        for entry in wl_ratio_data:
+        print('Average points allowed at home for each team:')
+        for entry in pts_allowed_home_average_season_data:
             print(entry)
-            print(wl_ratio_data[entry])
+            print(f"\t{pts_allowed_home_average_season_data[entry]}")
             print("\n")
+        print('--------------------------------')
+        print('Average points allowed away for each team:')
+        for entry in pts_allowed_away_average_season_data:
+            print(entry)
+            print(f"\t{pts_allowed_away_average_season_data[entry]}")
+            print("\n")
+        # print('--------------------------------')
+        # print('Average FG percentages at home for the season:')
+        # for entry in fg_per_home_average_seasson_data:
+        #     print(entry)
+        #     print(f"\t{fg_per_home_average_seasson_data[entry]}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Average FG percentages away for the season:')
+        # for entry in fg_per_away_average_season_data:
+        #     print(entry)
+        #     print(f"\t{fg_per_away_average_season_data[entry]}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Average 3 point FG percentages at home for the season:')
+        # for entry in three_pt_per_home_average_season_data:
+        #     print(entry)
+        #     print(f"\t{three_pt_per_home_average_season_data[entry]}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('Average 3 point FG percentages away for the season:')
+        # for entry in three_pt_per_away_average_season_data:
+        #     print(entry)
+        #     print(f"\t{three_pt_per_away_average_season_data[entry]}")
+        #     print("\n")
+        # print('--------------------------------')
+        # print('W/L ratios for the season:')
+        # for entry in wl_ratio_data:
+        #     print(entry)
+        #     print(f"\t{wl_ratio_data[entry]}")
+        #     print("\n")
+
 
         # Write data to database
-        uploadToDb(home_averaged_season_data, away_averaged_season_data, wl_ratio_data)
+        uploadToDb(home_averaged_season_data, away_averaged_season_data, pts_scored_home_average_season_data, pts_scored_away_average_season_data, pts_allowed_home_average_season_data, pts_allowed_away_average_season_data, fg_per_home_average_seasson_data, fg_per_away_average_season_data, three_pt_per_home_average_season_data, three_pt_per_away_average_season_data, wl_ratio_data)
