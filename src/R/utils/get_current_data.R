@@ -79,9 +79,9 @@ for (season_year in seasons) {
 
     filename <- file.path(output_folder, paste0("wnba_stats_schedule_", season_year, ".csv"))
     write.csv(merged_data, filename, row.names = FALSE)
-    message(paste("✅ Saved:", filename))
+    message(paste("Saved:", filename))
   } else {
-    message(paste("⚠️ bind_rows did not return a data frame for season:", season_year))
+    message(paste("Bind_rows did not return a data frame for season:", season_year))
   }
 }
   message(paste("Saved CSV for season:", season_year))
