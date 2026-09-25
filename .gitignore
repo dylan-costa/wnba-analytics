@@ -1,2 +1,9 @@
 .DS_Store
-wnba_stats.db
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Built from data/raw by `wnba build`
+data/wnba.db
+data/*.tmp
