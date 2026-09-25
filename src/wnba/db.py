@@ -7,13 +7,26 @@ from collections import defaultdict
 from importlib.resources import files
 from pathlib import Path
 
-from wnba.config import DB_PATH, RAW_GAME_LOG_DIR, SEASON_TYPE_BY_PREFIX
+from wnba.config import DB_PATH, RAW_PLAYER_GAMES_DIR, RAW_TEAM_GAMES_DIR, SEASON_TYPE_BY_PREFIX
 
 # Games the API lists as 0-0 with no winner because one team forfeited.
 # game_id -> team_id awarded the win.
 FORFEITS = {
     # 2018-08-03 LVA @ WAS: the Aces refused to play after a ~25-hour travel delay.
     "1021800162": 1611661322,  # Washington Mystics
+}
+
+# Games whose player box scores in the league's own data don't add up to the
+# official final score (the team totals here match the line score). The player
+# rows are the only ones that exist and are off by 1-3 points, so they're kept.
+PLAYER_POINTS_MISMATCHES = {
+    "1029700003", "1029700007", "1029700019", "1029700070",  # 1997
+    "1029800015", "1029800017",  # 1998
+    "1020000131",  # 2000
+}
+# Games whose player box score is too incomplete to use; their player rows are dropped.
+PLAYER_BOX_UNUSABLE = {
+    "1020000154",  # 2000-07-12 CLE @ ORL: 5 players per team listed, scoring 14 and 1 of 74-72
 }
 
 REGULATION_MINUTES = 200  # 5 players x 40 minutes
@@ -47,11 +60,30 @@ def parse_team_game(row: dict[str, str]) -> dict:
     }
 
 
-def read_raw_team_games(raw_dir: Path = RAW_GAME_LOG_DIR) -> list[dict]:
+def parse_player_game(row: dict[str, str]) -> dict:
+    """Convert one raw API row (one player in one game) into a flat record."""
+    return {
+        "game_id": row["GAME_ID"],
+        "player_id": int(row["PLAYER_ID"]),
+        "name": row["PLAYER_NAME"],
+        "team_id": int(row["TEAM_ID"]),
+        "season": int(row["SEASON_ID"][1:]),
+        "minutes": int(row["MIN"]),
+        "pts": int(row["PTS"]),
+        **{col: _optional_int(row[api_col]) for col, api_col in BOX_COLUMNS.items()},
+        "plus_minus": _optional_int(row["PLUS_MINUS"]),
+    }
+
+
+def _optional_int(value: str) -> int | None:
+    return int(value) if value != "" else None
+
+
+def read_raw(raw_dir: Path, parse) -> list[dict]:
     records = []
     for path in sorted(raw_dir.glob("*.csv")):
         with open(path, newline="", encoding="utf-8") as f:
-            records.extend(parse_team_game(row) for row in csv.DictReader(f))
+            records.extend(parse(row) for row in csv.DictReader(f))
     return records
 
 
@@ -102,7 +134,54 @@ def pair_games(team_games: list[dict]) -> list[dict]:
     return sorted(games, key=lambda g: (g["game_date"], g["game_id"]))
 
 
-def _write(conn: sqlite3.Connection, games: list[dict]) -> None:
+def player_box_status(game: dict) -> str:
+    if game["is_forfeit"] or game["game_id"] in PLAYER_BOX_UNUSABLE:
+        return "missing"
+    if game["game_id"] in PLAYER_POINTS_MISMATCHES:
+        return "points_mismatch"
+    return "ok"
+
+
+def check_player_games(games: list[dict], player_games: list[dict]) -> None:
+    """Check player rows against the games: every player is on one of the two
+    teams, and each team's player points add up to its score (apart from the
+    known exceptions above).
+
+    Raises ValueError listing every problem found.
+    """
+    games_by_id = {g["game_id"]: g for g in games}
+    team_pts = defaultdict(int)
+    seen = set()
+    problems = []
+    for pg in player_games:
+        game = games_by_id.get(pg["game_id"])
+        if game is None:
+            problems.append(f"{pg['game_id']}: player {pg['player_id']} is in a game with no team rows")
+            continue
+        if pg["team_id"] not in (game["home"]["team_id"], game["away"]["team_id"]):
+            problems.append(f"{pg['game_id']}: player {pg['player_id']} isn't on either team")
+            continue
+        if (pg["game_id"], pg["player_id"]) in seen:
+            problems.append(f"{pg['game_id']}: player {pg['player_id']} listed twice")
+            continue
+        seen.add((pg["game_id"], pg["player_id"]))
+        team_pts[(pg["game_id"], pg["team_id"])] += pg["pts"]
+
+    for game in games:
+        if game["is_forfeit"] or game["game_id"] in PLAYER_POINTS_MISMATCHES | PLAYER_BOX_UNUSABLE:
+            continue
+        for side in (game["home"], game["away"]):
+            player_total = team_pts.get((game["game_id"], side["team_id"]), 0)
+            if player_total != side["pts"]:
+                problems.append(
+                    f"{game['game_id']}: {side['abbreviation']} players scored {player_total}, team scored {side['pts']}"
+                )
+
+    if problems:
+        raise ValueError(f"{len(problems)} bad player rows in raw data:\n" + "\n".join(problems))
+
+
+def _write(conn: sqlite3.Connection, games: list[dict], player_games: list[dict]) -> None:
     conn.executescript(files("wnba").joinpath("schema.sql").read_text(encoding="utf-8"))
 
     team_seasons = {}
@@ -124,11 +203,11 @@ def _write(conn: sqlite3.Connection, games: list[dict]) -> None:
         [(season, tid, name, abbr) for (season, tid), (name, abbr) in team_seasons.items()],
     )
     conn.executemany(
-        "INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (g["game_id"], g["season"], g["season_type"], g["game_date"],
              g["home"]["team_id"], g["away"]["team_id"], g["home"]["pts"], g["away"]["pts"],
-             g["winner_team_id"], g["overtimes"], g["is_forfeit"])
+             g["winner_team_id"], g["overtimes"], g["is_forfeit"], player_box_status(g))
             for g in games
         ],
     )
@@ -148,17 +227,49 @@ def _write(conn: sqlite3.Connection, games: list[dict]) -> None:
         ],
     )
 
+    players = {}
+    for pg in sorted(player_games, key=lambda pg: pg["season"]):
+        first = players.get(pg["player_id"], {}).get("first_season", pg["season"])
+        players[pg["player_id"]] = {"name": pg["name"], "first_season": first, "last_season": pg["season"]}
+    conn.executemany(
+        "INSERT INTO players VALUES (?, ?, ?, ?)",
+        [(pid, p["name"], p["first_season"], p["last_season"]) for pid, p in players.items()],
+    )
 
-def build(db_path: Path = DB_PATH, raw_dir: Path = RAW_GAME_LOG_DIR) -> dict[str, int]:
+    games_by_id = {g["game_id"]: g for g in games}
+    columns = [
+        "game_id", "player_id", "team_id", "opponent_team_id", "season", "season_type", "game_date",
+        "is_home", "win", "minutes", "pts", *BOX_COLUMNS, "plus_minus",
+    ]
+    rows = []
+    for pg in player_games:
+        g = games_by_id[pg["game_id"]]
+        is_home = pg["team_id"] == g["home"]["team_id"]
+        opponent_id = (g["away"] if is_home else g["home"])["team_id"]
+        rows.append((
+            pg["game_id"], pg["player_id"], pg["team_id"], opponent_id, g["season"], g["season_type"], g["game_date"],
+            is_home, pg["team_id"] == g["winner_team_id"], pg["minutes"], pg["pts"],
+            *(pg[c] for c in BOX_COLUMNS), pg["plus_minus"],
+        ))
+    conn.executemany(f"INSERT INTO player_games ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})", rows)
+
+
+def build(
+    db_path: Path = DB_PATH,
+    team_dir: Path = RAW_TEAM_GAMES_DIR,
+    player_dir: Path = RAW_PLAYER_GAMES_DIR,
+) -> dict[str, int]:
     """Rebuild the database from scratch out of the raw game logs.
 
     Writes to a temporary file and swaps it in at the end, so a failed build
     never leaves a half-written database behind. Returns row counts per table.
     """
-    team_games = read_raw_team_games(raw_dir)
-    if not team_games:
-        raise FileNotFoundError(f"No raw game logs in {raw_dir}. Run `wnba fetch` first.")
+    team_games = read_raw(team_dir, parse_team_game)
+    player_games = [pg for pg in read_raw(player_dir, parse_player_game) if pg["game_id"] not in PLAYER_BOX_UNUSABLE]
+    if not team_games or not player_games:
+        raise FileNotFoundError(f"No raw game logs in {team_dir} or {player_dir}. Run `wnba fetch` first.")
     games = pair_games(team_games)
+    check_player_games(games, player_games)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = db_path.with_name(db_path.name + ".tmp")
@@ -166,10 +277,11 @@ def build(db_path: Path = DB_PATH, raw_dir: Path = RAW_GAME_LOG_DIR) -> dict[str
     conn = sqlite3.connect(tmp_path)
     try:
         with conn:
-            _write(conn, games)
+            _write(conn, games, player_games)
+        conn.execute("ANALYZE")  # table statistics so SQLite picks good indexes
         counts = {
             table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("franchises", "team_seasons", "games", "team_games")
+            for table in ("franchises", "team_seasons", "games", "team_games", "players", "player_games")
         }
     except BaseException:
         conn.close()
@@ -194,4 +306,19 @@ def standings(conn: sqlite3.Connection, season: int, season_type: str = "regular
         "SELECT * FROM team_season_stats WHERE season = ? AND season_type = ? "
         "ORDER BY win_pct DESC, net_rating DESC",
         (season, season_type),
+    ).fetchall()
+
+
+def scoring_leaders(conn: sqlite3.Connection, season: int, season_type: str = "regular", limit: int = 10) -> list[sqlite3.Row]:
+    """Top scorers by points per game, among players who played at least half
+    their team's games (the league's scoring-title threshold is similar)."""
+    return conn.execute(
+        """
+        SELECT ps.* FROM player_season_stats ps
+        JOIN team_season_stats ts USING (season, season_type, team_id)
+        WHERE ps.season = ? AND ps.season_type = ? AND ps.games * 2 >= ts.games
+        ORDER BY ps.pts_per_game DESC
+        LIMIT ?
+        """,
+        (season, season_type, limit),
     ).fetchall()

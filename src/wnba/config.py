@@ -7,7 +7,8 @@ from pathlib import Path
 # data somewhere else.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("WNBA_DATA_DIR", REPO_ROOT / "data"))
-RAW_GAME_LOG_DIR = DATA_DIR / "raw" / "leaguegamelog"
+RAW_TEAM_GAMES_DIR = DATA_DIR / "raw" / "team_games"
+RAW_PLAYER_GAMES_DIR = DATA_DIR / "raw" / "player_games"
 DB_PATH = DATA_DIR / "wnba.db"
 UPDATE_LOG_PATH = DATA_DIR / "update.log"
 

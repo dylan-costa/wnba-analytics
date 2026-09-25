@@ -1,4 +1,4 @@
-"""Command-line entry point: `wnba fetch`, `wnba build`, `wnba update`, `wnba standings`."""
+"""Command-line entry point: `wnba fetch`, `wnba build`, `wnba update`, `wnba standings`, `wnba leaders`."""
 
 import argparse
 import traceback
@@ -44,7 +44,10 @@ def cmd_update(args: argparse.Namespace) -> None:
     except Exception:
         log(f"FAILED\n{traceback.format_exc()}")
         raise
-    fetched_summary = ", ".join(f"{season} {season_type}: {n}" for (season, season_type), n in fetched.items())
+    fetched_summary = ", ".join(
+        f"{season} {season_type}: {n_team} team/{n_player} player rows"
+        for (season, season_type), (n_team, n_player) in fetched.items()
+    )
     log(f"ok: {counts['games']:,} games in db (fetched {fetched_summary or 'nothing'})")
     print(f"Updated {DB_PATH}: {counts['games']:,} games")
 
@@ -61,6 +64,21 @@ def cmd_standings(args: argparse.Namespace) -> None:
         print(
             f"{r['name']:<26} {r['wins']:>3} {r['losses']:>3} {r['win_pct']:>6.3f} "
             f"{r['pts_per_game']:>6.1f} {r['opp_pts_per_game']:>6.1f} {r['net_rating']:>+6.1f}"
+        )
+
+
+def cmd_leaders(args: argparse.Namespace) -> None:
+    season_type = "playoffs" if args.playoffs else "regular"
+    with closing(db.connect()) as conn:
+        rows = db.scoring_leaders(conn, args.season, season_type, args.limit)
+    if not rows:
+        print(f"No {season_type} games for {args.season}.")
+        return
+    print(f"{'Player':<26} {'Team':<5} {'G':>3} {'MPG':>5} {'PPG':>5} {'RPG':>5} {'APG':>5} {'TS%':>6}")
+    for r in rows:
+        print(
+            f"{r['name']:<26} {r['team']:<5} {r['games']:>3} {r['minutes_per_game']:>5.1f} {r['pts_per_game']:>5.1f} "
+            f"{r['reb_per_game']:>5.1f} {r['ast_per_game']:>5.1f} {r['ts_pct']:>6.3f}"
         )
 
 
@@ -84,6 +102,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("season", type=int)
     p.add_argument("--playoffs", action="store_true")
     p.set_defaults(func=cmd_standings)
+
+    p = sub.add_parser("leaders", help="print a season's top scorers")
+    p.add_argument("season", type=int)
+    p.add_argument("--playoffs", action="store_true")
+    p.add_argument("--limit", type=int, default=10)
+    p.set_defaults(func=cmd_leaders)
 
     args = parser.parse_args(argv)
     args.func(args)

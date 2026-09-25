@@ -11,12 +11,12 @@ def log_path(tmp_path, monkeypatch):
 
 
 def test_update_logs_success(log_path, monkeypatch):
-    monkeypatch.setattr(cli.fetch, "fetch_seasons", lambda seasons, types: {(2026, "regular"): 660})
+    monkeypatch.setattr(cli.fetch, "fetch_seasons", lambda seasons, types: {(2026, "regular"): (660, 6000)})
     monkeypatch.setattr(cli.db, "build", lambda: {"games": 7001})
 
     cli.main(["update"])
 
-    assert log_path.read_text().strip().endswith("ok: 7,001 games in db (fetched 2026 regular: 660)")
+    assert log_path.read_text().strip().endswith("ok: 7,001 games in db (fetched 2026 regular: 660 team/6000 player rows)")
 
 
 def test_update_logs_failure_and_skips_build(log_path, monkeypatch):

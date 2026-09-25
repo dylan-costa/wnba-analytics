@@ -71,3 +71,42 @@ def test_relocated_franchises_share_an_id(real_db):
         )
     }
     assert names == {"Utah Starzz", "San Antonio Silver Stars", "San Antonio Stars", "Las Vegas Aces"}
+
+
+def test_known_scoring_season(real_db):
+    """A'ja Wilson's 2024 scoring title: 1,021 points in 38 games."""
+    row = real_db.execute(
+        "SELECT games, pts_per_game FROM player_season_stats "
+        "WHERE season = 2024 AND season_type = 'regular' AND name = 'A''ja Wilson'"
+    ).fetchone()
+    assert row["games"] == 38
+    assert round(row["pts_per_game"] * row["games"]) == 1021
+
+
+def test_player_points_match_team_points(real_db):
+    """Build checks this per game; this guards the loaded tables as a whole."""
+    team_total, player_total = real_db.execute(
+        """
+        SELECT
+            (SELECT SUM(pts) FROM team_games JOIN games USING (game_id) WHERE player_box = 'ok'),
+            (SELECT SUM(pts) FROM player_games JOIN games USING (game_id) WHERE player_box = 'ok')
+        """
+    ).fetchone()
+    assert team_total == player_total
+
+
+def test_player_box_exceptions_are_rare(real_db):
+    counts = dict(real_db.execute("SELECT player_box, COUNT(*) FROM games GROUP BY player_box").fetchall())
+    assert counts["points_mismatch"] == 7
+    assert counts["missing"] == 2
+
+
+def test_every_played_game_has_players_on_both_teams(real_db):
+    missing = real_db.execute(
+        """
+        SELECT tg.game_id, tg.team_id FROM team_games tg JOIN games g USING (game_id)
+        WHERE g.player_box != 'missing'
+          AND NOT EXISTS (SELECT 1 FROM player_games pg WHERE pg.game_id = tg.game_id AND pg.team_id = tg.team_id)
+        """
+    ).fetchall()
+    assert missing == []
