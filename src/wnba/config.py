@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("WNBA_DATA_DIR", REPO_ROOT / "data"))
 RAW_GAME_LOG_DIR = DATA_DIR / "raw" / "leaguegamelog"
 DB_PATH = DATA_DIR / "wnba.db"
+UPDATE_LOG_PATH = DATA_DIR / "update.log"
 
 FIRST_SEASON = 1997
 

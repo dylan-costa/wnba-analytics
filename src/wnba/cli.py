@@ -1,11 +1,12 @@
-"""Command-line entry point: `wnba fetch`, `wnba build`, `wnba standings`."""
+"""Command-line entry point: `wnba fetch`, `wnba build`, `wnba update`, `wnba standings`."""
 
 import argparse
+import traceback
 from contextlib import closing
-from datetime import date
+from datetime import date, datetime
 
 from wnba import db, fetch
-from wnba.config import API_SEASON_TYPES, DB_PATH, DEFAULT_SEASON_TYPES, FIRST_SEASON
+from wnba.config import API_SEASON_TYPES, DB_PATH, DEFAULT_SEASON_TYPES, FIRST_SEASON, UPDATE_LOG_PATH
 
 
 def parse_seasons(values: list[str]) -> list[int]:
@@ -27,6 +28,25 @@ def cmd_build(args: argparse.Namespace) -> None:
     print(f"Built {DB_PATH}")
     for table, count in counts.items():
         print(f"  {table}: {count:,}")
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    """Fetch new games and rebuild. Run daily by the scheduled task, so it logs
+    every outcome to data/update.log (there's no console to print to)."""
+    def log(message: str) -> None:
+        UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(UPDATE_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}\n")
+
+    try:
+        fetched = fetch.fetch_seasons(list(range(FIRST_SEASON, date.today().year + 1)), list(DEFAULT_SEASON_TYPES))
+        counts = db.build()
+    except Exception:
+        log(f"FAILED\n{traceback.format_exc()}")
+        raise
+    fetched_summary = ", ".join(f"{season} {season_type}: {n}" for (season, season_type), n in fetched.items())
+    log(f"ok: {counts['games']:,} games in db (fetched {fetched_summary or 'nothing'})")
+    print(f"Updated {DB_PATH}: {counts['games']:,} games")
 
 
 def cmd_standings(args: argparse.Namespace) -> None:
@@ -56,6 +76,9 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("build", help="rebuild data/wnba.db from the raw game logs")
     p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("update", help="fetch new games and rebuild the database (what the daily task runs)")
+    p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("standings", help="print a season's standings and team ratings")
     p.add_argument("season", type=int)

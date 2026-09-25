@@ -31,6 +31,24 @@ wnba fetch --seasons 1997-2026 --season-types regular playoffs preseason
 wnba build
 ```
 
+## Daily updates
+
+`wnba update` does both steps (fetch the current season, rebuild) and appends the result to `data/update.log`. To run it automatically every morning on Windows:
+
+```bash
+.\scripts\schedule_daily_update.ps1              # daily at 9:00 AM; add -Time 11:30 to change
+```
+
+The task catches up if the PC was off or asleep at that time and runs on battery. It uses `pythonw`, so no console window pops up. The API only lists final games, so a morning run picks up everything from the night before.
+
+```bash
+Get-Content data\update.log -Tail 5                                  # did it run?
+Start-ScheduledTask -TaskName "wnba-analytics daily update"          # run it now
+Unregister-ScheduledTask -TaskName "wnba-analytics daily update"     # remove it
+```
+
+Daily runs rewrite `data/raw/leaguegamelog/<current season>_*.csv` when there are new games. Commit those files now and then so the repo's raw data stays current.
+
 ## Layout
 
 ```
@@ -42,6 +60,8 @@ src/wnba/
   schema.sql              tables and views
   cli.py                  `wnba` command
   config.py               paths and constants
+scripts/
+  schedule_daily_update.ps1   registers the daily `wnba update` task (Windows)
 tests/
 ```
 

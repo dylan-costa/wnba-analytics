@@ -7,3 +7,4 @@ __pycache__/
 # Built from data/raw by `wnba build`
 data/wnba.db
 data/*.tmp
+data/update.log
