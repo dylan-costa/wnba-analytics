@@ -1,7 +1,7 @@
 import pytest
 
 from conftest import api_row, game_player_rows, game_rows, player_row, write_games, write_raw
-from wnba import db
+from wnba import db, fetch
 from wnba.cli import parse_seasons
 from wnba.db import FORFEITS, check_player_games, pair_games, parse_player_game, parse_team_game
 
@@ -104,8 +104,11 @@ def test_build_writes_tables_and_views(tmp_path):
     team_dir, player_dir = write_games(tmp_path, "2024_regular.csv", [("g1", 1, 2, 80, 70), ("g2", 2, 1, 75, 91)])
     db_path = tmp_path / "wnba.db"
 
-    counts = db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir)
-    assert counts == {"franchises": 2, "team_seasons": 2, "games": 2, "team_games": 4, "players": 4, "player_games": 8}
+    counts = db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=tmp_path / "no_schedule")
+    assert counts == {
+        "franchises": 2, "team_seasons": 2, "games": 2, "team_games": 4, "players": 4, "player_games": 8,
+        "schedule": 0, "elo_games": 2,
+    }
 
     conn = db.connect(db_path)
     alpha, beta = db.standings(conn, 2024)
@@ -126,17 +129,64 @@ def test_build_writes_tables_and_views(tmp_path):
 def test_build_is_repeatable(tmp_path):
     team_dir, player_dir = write_games(tmp_path, "2024_regular.csv", [("g1", 1, 2, 80, 70)])
     db_path = tmp_path / "wnba.db"
-    first = db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir)
-    assert db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir) == first
+    first = db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=tmp_path / "no_schedule")
+    assert db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=tmp_path / "no_schedule") == first
     assert not (tmp_path / "wnba.db.tmp").exists()
 
 
 def test_failed_build_keeps_existing_db(tmp_path):
     team_dir, player_dir = write_games(tmp_path, "2024_regular.csv", [("g1", 1, 2, 80, 70)])
     db_path = tmp_path / "wnba.db"
-    db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir)
+    db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=tmp_path / "no_schedule")
 
     write_raw(team_dir, "2024_playoffs.csv", game_rows("g2", 1, 2, 80, 70, wl="L", season_id="42024"))
     with pytest.raises(ValueError):
-        db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir)
+        db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=tmp_path / "no_schedule")
     assert db.connect(db_path).execute("SELECT COUNT(*) FROM games").fetchone()[0] == 1
+
+
+SCHEDULE_HEADERS = fetch.SCHEDULE_HEADERS
+
+
+def schedule_row(game_id, home, away, home_seed="", away_seed="", label="First Round", sub_label="Game 1", date="2024-09-22"):
+    return {
+        "GAME_ID": game_id, "GAME_DATE": date, "GAME_STATUS": 1, "HOME_TEAM_ID": home, "AWAY_TEAM_ID": away,
+        "HOME_SEED": home_seed, "AWAY_SEED": away_seed, "GAME_LABEL": label, "GAME_SUB_LABEL": sub_label, "IF_NECESSARY": 0,
+    }
+
+
+def test_build_loads_upcoming_schedule_seeds_and_ratings(tmp_path):
+    team_dir, player_dir = write_games(tmp_path, "2024_regular.csv", [("1022400001", 1, 2, 80, 70)])
+    schedule_dir = tmp_path / "schedule"
+    write_raw(schedule_dir, "2024.csv", [
+        schedule_row("1022400001", 1, 2, label="", sub_label=""),  # already played: left out
+        schedule_row("1042400101", 1, 2, 1, 2),
+        schedule_row("1042400201", 0, 0, label="Finals"),  # teams not decided yet
+        schedule_row("1012400001", 1, 2, label="Preseason"),  # ignored
+    ], SCHEDULE_HEADERS)
+    db_path = tmp_path / "wnba.db"
+
+    counts = db.build(db_path=db_path, team_dir=team_dir, player_dir=player_dir, schedule_dir=schedule_dir)
+
+    assert (counts["schedule"], counts["elo_games"]) == (2, 1)
+    conn = db.connect(db_path)
+    upcoming = conn.execute("SELECT game_id, season, season_type, home_team_id, label FROM schedule ORDER BY game_id").fetchall()
+    assert [tuple(r) for r in upcoming] == [
+        ("1042400101", 2024, "playoffs", 1, "First Round Game 1"),
+        ("1042400201", 2024, "playoffs", None, "Finals Game 1"),
+    ]
+    assert [tuple(r) for r in conn.execute("SELECT seed, team_id FROM playoff_seeds ORDER BY seed")] == [(1, 1), (2, 2)]
+    home_win_prob, home_spread = conn.execute("SELECT home_win_prob, home_spread FROM elo_games").fetchone()
+    assert home_win_prob > 0.5 and home_spread > 0  # equal new teams, so home court decides
+    conn.close()
+
+
+def test_build_rejects_inconsistent_seeds(tmp_path):
+    team_dir, player_dir = write_games(tmp_path, "2024_regular.csv", [("1022400001", 1, 2, 80, 70)])
+    schedule_dir = tmp_path / "schedule"
+    write_raw(schedule_dir, "2024.csv", [
+        schedule_row("1042400101", 1, 2, 1, 8),
+        schedule_row("1042400102", 2, 1, 7, 1),
+    ], SCHEDULE_HEADERS)
+    with pytest.raises(ValueError, match="Inconsistent playoff seeds"):
+        db.build(db_path=tmp_path / "wnba.db", team_dir=team_dir, player_dir=player_dir, schedule_dir=schedule_dir)

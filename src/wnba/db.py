@@ -7,7 +7,8 @@ from collections import defaultdict
 from importlib.resources import files
 from pathlib import Path
 
-from wnba.config import DB_PATH, RAW_PLAYER_GAMES_DIR, RAW_TEAM_GAMES_DIR, SEASON_TYPE_BY_PREFIX
+from wnba import elo
+from wnba.config import DB_PATH, RAW_PLAYER_GAMES_DIR, RAW_SCHEDULE_DIR, RAW_TEAM_GAMES_DIR, SEASON_TYPE_BY_PREFIX
 
 # Games the API lists as 0-0 with no winner because one team forfeited.
 # game_id -> team_id awarded the win.
@@ -77,6 +78,43 @@ def parse_player_game(row: dict[str, str]) -> dict:
 
 def _optional_int(value: str) -> int | None:
     return int(value) if value != "" else None
+
+
+def read_schedule(schedule_dir: Path) -> list[dict]:
+    """Regular-season and playoff games from the schedule files ({season}.csv)."""
+    rows = []
+    for path in sorted(schedule_dir.glob("*.csv")):
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                season_type = SEASON_TYPE_BY_PREFIX.get(row["GAME_ID"][2])
+                if season_type not in ("regular", "playoffs"):
+                    continue  # preseason, All-Star, Commissioner's Cup final
+                rows.append({
+                    "game_id": row["GAME_ID"],
+                    "season": int(path.stem),
+                    "season_type": season_type,
+                    "game_date": row["GAME_DATE"],
+                    "home_team_id": int(row["HOME_TEAM_ID"]) or None,
+                    "away_team_id": int(row["AWAY_TEAM_ID"]) or None,
+                    "home_seed": _optional_int(row["HOME_SEED"]),
+                    "away_seed": _optional_int(row["AWAY_SEED"]),
+                    "label": f"{row['GAME_LABEL']} {row['GAME_SUB_LABEL']}".strip(),
+                    "if_necessary": int(row["IF_NECESSARY"]),
+                })
+    return rows
+
+
+def playoff_seeds(schedule: list[dict]) -> dict[tuple[int, int], int]:
+    """(season, seed) -> team_id from playoff schedule rows. Raises ValueError
+    if a team shows up with two different seeds."""
+    seeds, team_seed = {}, {}
+    for g in schedule:
+        for team_id, seed in ((g["home_team_id"], g["home_seed"]), (g["away_team_id"], g["away_seed"])):
+            if g["season_type"] != "playoffs" or not team_id or seed is None:
+                continue
+            if team_seed.setdefault((g["season"], team_id), seed) != seed or seeds.setdefault((g["season"], seed), team_id) != team_id:
+                raise ValueError(f"Inconsistent playoff seeds in the {g['season']} schedule (game {g['game_id']})")
+    return seeds
 
 
 def read_raw(raw_dir: Path, parse) -> list[dict]:
@@ -181,6 +219,36 @@ def check_player_games(games: list[dict], player_games: list[dict]) -> None:
         raise ValueError(f"{len(problems)} bad player rows in raw data:\n" + "\n".join(problems))
 
 
+def _write_schedule_and_ratings(conn: sqlite3.Connection, games: list[dict], schedule: list[dict]) -> None:
+    played = {g["game_id"] for g in games}
+    conn.executemany(
+        "INSERT INTO schedule VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (s["game_id"], s["season"], s["season_type"], s["game_date"], s["home_team_id"], s["away_team_id"],
+             s["label"], s["if_necessary"])
+            for s in schedule if s["game_id"] not in played
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO playoff_seeds VALUES (?, ?, ?)",
+        [(season, seed, team_id) for (season, seed), team_id in playoff_seeds(schedule).items()],
+    )
+
+    rated, _ = elo.run({
+        "game_id": g["game_id"], "season": g["season"], "season_type": g["season_type"],
+        "home_team_id": g["home"]["team_id"], "away_team_id": g["away"]["team_id"],
+        "home_pts": g["home"]["pts"], "away_pts": g["away"]["pts"], "is_forfeit": g["is_forfeit"],
+    } for g in games)
+    conn.executemany(
+        "INSERT INTO elo_games VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (r.game_id, r.home_elo_pre, r.away_elo_pre, r.home_advantage, r.home_win_prob,
+             elo.spread(r.home_win_prob), r.home_elo_post, r.away_elo_post)
+            for r in rated
+        ],
+    )
+
+
 def _write(conn: sqlite3.Connection, games: list[dict], player_games: list[dict]) -> None:
     conn.executescript(files("wnba").joinpath("schema.sql").read_text(encoding="utf-8"))
 
@@ -258,6 +326,7 @@ def build(
     db_path: Path = DB_PATH,
     team_dir: Path = RAW_TEAM_GAMES_DIR,
     player_dir: Path = RAW_PLAYER_GAMES_DIR,
+    schedule_dir: Path = RAW_SCHEDULE_DIR,
 ) -> dict[str, int]:
     """Rebuild the database from scratch out of the raw game logs.
 
@@ -270,6 +339,7 @@ def build(
         raise FileNotFoundError(f"No raw game logs in {team_dir} or {player_dir}. Run `wnba fetch` first.")
     games = pair_games(team_games)
     check_player_games(games, player_games)
+    schedule = read_schedule(schedule_dir)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = db_path.with_name(db_path.name + ".tmp")
@@ -278,10 +348,11 @@ def build(
     try:
         with conn:
             _write(conn, games, player_games)
+            _write_schedule_and_ratings(conn, games, schedule)
         conn.execute("ANALYZE")  # table statistics so SQLite picks good indexes
         counts = {
             table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("franchises", "team_seasons", "games", "team_games", "players", "player_games")
+            for table in ("franchises", "team_seasons", "games", "team_games", "players", "player_games", "schedule", "elo_games")
         }
     except BaseException:
         conn.close()

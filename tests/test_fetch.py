@@ -131,3 +131,20 @@ def test_box_score_matches_game_log_format(monkeypatch):
 def test_box_score_skips_unfinished_games(monkeypatch):
     monkeypatch.setattr(fetch, "_get", lambda endpoint, params: {"GameSummary": [{"GAME_STATUS_TEXT": "7:00 pm ET"}]})
     assert fetch.fetch_box_score("1022600999", "22026") is None
+
+
+def test_fetch_schedule_flattens_games(monkeypatch):
+    team = lambda team_id, tricode, seed: {"teamId": team_id, "teamTricode": tricode, "seed": seed}
+    response = {"leagueSchedule": {"gameDates": [{"games": [
+        {"gameId": "1042600101", "gameDateEst": "2026-09-27T00:00:00Z", "gameStatus": 1, "ifNecessary": False,
+         "gameLabel": "First Round", "gameSubLabel": "Game 1", "homeTeam": team(1611661324, "MIN", 1), "awayTeam": team(1611661313, "NYL", 8)},
+        {"gameId": "1042600301", "gameDateEst": "2026-10-17T00:00:00Z", "gameStatus": 1, "ifNecessary": "true",
+         "gameLabel": "WNBA Finals", "gameSubLabel": "Game 1", "homeTeam": team(0, None, None), "awayTeam": team(0, None, None)},
+    ]}]}}
+    monkeypatch.setattr(fetch, "_get_json", lambda endpoint, params: response)
+
+    first_round, finals = fetch.fetch_schedule(2026)
+
+    assert list(first_round) == fetch.SCHEDULE_HEADERS
+    assert (first_round["GAME_DATE"], first_round["HOME_SEED"], first_round["AWAY_SEED"], first_round["IF_NECESSARY"]) == ("2026-09-27", 1, 8, 0)
+    assert (finals["HOME_TEAM_ID"], finals["HOME_SEED"], finals["IF_NECESSARY"]) == (0, "", 1)

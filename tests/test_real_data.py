@@ -110,3 +110,22 @@ def test_every_played_game_has_players_on_both_teams(real_db):
         """
     ).fetchall()
     assert missing == []
+
+
+def test_elo_beats_baseline_on_held_out_seasons(real_db):
+    """Guards against model changes that make predictions worse. Seasons from
+    2019 on weren't used to choose the parameters."""
+    from wnba import elo
+
+    rated, _ = elo.run(elo.load_games(real_db))
+    result = elo.evaluate([g for g in rated if 2019 <= g.season <= 2026], elo.MARGIN_SD)
+    assert result.log_loss < 0.615
+    assert result.log_loss < result.baseline_log_loss - 0.07
+    assert result.accuracy > 0.66
+
+
+def test_2026_playoff_seeds_match_schedule(real_db):
+    seeds = dict(real_db.execute(
+        "SELECT ps.seed, ts.abbreviation FROM playoff_seeds ps JOIN team_seasons ts USING (season, team_id) WHERE ps.season = 2026"
+    ).fetchall())
+    assert seeds == {1: "MIN", 2: "GSV", 3: "LVA", 4: "ATL", 5: "WAS", 6: "IND", 7: "DAL", 8: "NYL"}

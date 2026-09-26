@@ -2,7 +2,7 @@
 
 A WNBA game data pipeline that feeds Monte Carlo simulations and game prediction models.
 
-It downloads every game since the league's first season (1997) from the stats.wnba.com API, with team and player box scores, checks it, and loads it into a SQLite database.
+It downloads every game since the league's first season (1997) from the stats.wnba.com API, with team and player box scores, checks it, and loads it into a SQLite database. On top of that it rates every team with Elo, predicts games, and runs Monte Carlo simulations of the rest of the season and the playoffs.
 
 ## Quickstart
 
@@ -18,6 +18,7 @@ pip install -e ".[dev]"
 wnba build                      # build data/wnba.db from the committed raw data
 wnba standings 2025             # sanity checks
 wnba leaders 2025
+wnba simulate                   # title odds
 pytest
 ```
 
@@ -32,35 +33,78 @@ wnba fetch --seasons 1997-2026 --season-types regular playoffs preseason
 wnba build
 ```
 
-## Daily updates
-
-`wnba update` does both steps (fetch the current season, rebuild) and appends the result to `data/update.log`. To run it automatically every morning on Windows:
+## Models
 
 ```bash
-.\scripts\schedule_daily_update.ps1              # daily at 9:00 AM; add -Time 11:30 to change
+wnba ratings                    # current Elo ratings
+wnba predict                    # upcoming games: home win probability and spread
+wnba predict LVA MIN            # any matchup (home team first); add --neutral for no home court
+wnba simulate                   # Monte Carlo odds for the rest of the season and the playoffs
+wnba simulate --season 2025 --as-of 2025-07-15   # replay a past season from a date
+wnba backtest                   # how well past predictions held up; --tune re-runs the grid search
+```
+
+**Elo ratings** (`elo.py`). Every team is rated after every game since 1997. The home team's win probability comes from the rating gap plus home-court advantage. After each game, ratings move by K = 30 times a margin-of-victory multiplier (FiveThirtyEight's NBA formula), so blowouts count more but favorites gain less for beating weak teams. Between seasons, ratings keep half their distance from the 1500 average; new teams start at 1300. Home advantage isn't fixed, because it has shrunk: from about +3 points (60% home wins) through 2019 to about +1.5 (54%) since. Each season uses the average home margin of the five seasons before it (43 Elo points for 2026). The 2020 bubble counts as neutral. Spreads come from the win probability, assuming final margins spread around the prediction with a standard deviation of 11 points.
+
+The parameters were tuned on 1997–2018 and then checked on 2019–2026, which the tuning never saw:
+
+| Seasons | Games | Log loss | Always pick home team | Correct picks | Spread RMSE |
+|---|---|---|---|---|---|
+| 1997–2018 (tuning) | 5,023 | 0.621 | 0.672 | 65.8% | 11.7 pts |
+| 2019–2026 (held out) | 1,977 | 0.608 | 0.688 | 67.5% | 12.7 pts |
+
+On the held-out seasons, predicted and actual win rates line up within about 2 points for home favorites. Home underdogs win a few points less often than predicted.
+
+**Monte Carlo** (`simulate.py`). Each simulation plays every remaining game. The home team wins with the Elo probability, the margin is drawn around the spread, and ratings update after each simulated game, so a team that gets hot stays hot for the rest of that simulation. Games already played count as they happened, including playoff games in a series that's under way. Remaining regular-season games come from the league schedule. Playoff seeds come from the schedule once they're set; before that, each simulation seeds the top 8 by record, breaking ties by record among the tied teams and then at random. Playoffs use the current format (2025 onward): best-of-3 first round (higher seed hosts games 1 and 3), best-of-5 semifinals, best-of-7 finals, fixed bracket with 1/8 meeting 4/5. The daily update refreshes the schedule, so `wnba simulate` stays current through the playoffs.
+
+**Limits.** Elo only knows results. It can't see injuries, trades, or who's playing tonight, and it lags sudden changes. From mid-July 2025 it gave the eventual champion Aces a 3% title chance before their winning streak. Using player data to adjust for who's actually available is the natural next step.
+
+## Daily updates
+
+`wnba update` does both steps (fetch the current season, rebuild) and appends the result to `data/update.log`. With `--push` it then commits any changed files in `data/raw` and pushes them to GitHub, so the repo stays current too.
+
+To run it automatically every morning on Windows:
+
+```bash
+.\scripts\schedule_daily_update.ps1              # daily at 9:00 AM, with --push
+.\scripts\schedule_daily_update.ps1 -Time 11:30  # different time
+.\scripts\schedule_daily_update.ps1 -NoPush      # update the local database only
 ```
 
 The task catches up if the PC was off or asleep at that time and runs on battery. It uses `pythonw`, so no console window pops up. The API only lists final games, so a morning run picks up everything from the night before.
 
+The automatic commits are deliberately cautious:
+
+- Only files under `data/raw` are committed ("Update game data through YYYY-MM-DD"), so anything else you're editing stays out of them.
+- They only happen with `main` checked out. On another branch, that day's commit is skipped.
+- Nothing is pushed if `main` has unpushed commits of your own; the log says to push manually.
+- If a push fails (offline, say), the commit stays local and the next run pushes it.
+- Nothing is committed if the build fails validation.
+
 ```bash
-Get-Content data\update.log -Tail 5                                  # did it run?
+Get-Content data\update.log -Tail 5                                  # did it run? what did git do?
 Start-ScheduledTask -TaskName "wnba-analytics daily update"          # run it now
 Unregister-ScheduledTask -TaskName "wnba-analytics daily update"     # remove it
 ```
 
-Daily runs rewrite the current season's files in `data/raw/` when there are new games. Commit those files now and then so the repo's raw data stays current.
+Since the task pushes to `main`, run `git pull` before starting work on another machine.
 
 ## Layout
 
 ```
 data/raw/team_games/      raw API responses: one row per team per game, one CSV per season + season type (committed)
 data/raw/player_games/    same, one row per player per game
+data/raw/schedule/        the current season's schedule: upcoming games and playoff seeds
 data/wnba.db              SQLite database built from data/raw (gitignored)
 src/wnba/
   fetch.py                stats.wnba.com client
   db.py                   parse, validate and load raw data; query helpers
   schema.sql              tables and views
+  elo.py                  Elo ratings, backtesting and tuning
+  predict.py              game predictions from current ratings
+  simulate.py             Monte Carlo season and playoff simulation
   cli.py                  `wnba` command
+  gitsync.py              commits and pushes new raw data after `wnba update --push`
   config.py               paths and constants
 scripts/
   schedule_daily_update.ps1   registers the daily `wnba update` task (Windows)
@@ -80,6 +124,9 @@ tests/
 | `team_game_box` (view) | team × game | `team_games` with the opponent's box score and estimated possessions |
 | `team_season_stats` (view) | team × season × season type | record, home/away splits, shooting, pace, offensive/defensive/net rating |
 | `player_season_stats` (view) | player × team × season × season type | per-game averages, shooting splits, true shooting %; a traded player gets one row per team |
+| `schedule` | game | upcoming games from the league schedule (current season); undecided playoff matchups have NULL teams |
+| `playoff_seeds` | season × seed | from the league schedule |
+| `elo_games` | game | both teams' Elo before and after, home advantage, pre-game home win probability and spread |
 | `head_to_head` (view) | team × opponent × season × season type | record and average margin |
 
 `season_type` is `regular`, `playoffs`, or `preseason` (preseason only if you fetch it).
@@ -107,6 +154,6 @@ The stats API is mostly clean, but it has a few quirks that the pipeline handles
 
 ## Roadmap
 
-1. Team ratings (Elo, opponent-adjusted net rating) computed game by game
-2. Game win-probability and margin model, backtested on past seasons
-3. Monte Carlo season and playoff simulator on top of it
+1. Player-availability adjustments: shift a team's rating when key players are out
+2. Richer game model (net rating, rest, travel) compared against Elo in the backtest
+3. Benchmark against betting lines

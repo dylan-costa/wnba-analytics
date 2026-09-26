@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
-from wnba.config import API_SEASON_TYPES, RAW_PLAYER_GAMES_DIR, RAW_TEAM_GAMES_DIR
+from wnba.config import API_SEASON_TYPES, RAW_PLAYER_GAMES_DIR, RAW_SCHEDULE_DIR, RAW_TEAM_GAMES_DIR
 
 API_URL = "https://stats.wnba.com/stats"
 
@@ -32,6 +32,10 @@ TEAM_LOG_HEADERS = [
 PLAYER_LOG_HEADERS = [
     "SEASON_ID", "PLAYER_ID", "PLAYER_NAME", "TEAM_ID", "TEAM_ABBREVIATION", "TEAM_NAME", "GAME_ID",
     "GAME_DATE", "MATCHUP", "WL", *_BOX_HEADERS, "FANTASY_PTS", "VIDEO_AVAILABLE",
+]
+SCHEDULE_HEADERS = [
+    "GAME_ID", "GAME_DATE", "GAME_STATUS", "HOME_TEAM_ID", "AWAY_TEAM_ID", "HOME_SEED", "AWAY_SEED",
+    "GAME_LABEL", "GAME_SUB_LABEL", "IF_NECESSARY",
 ]
 
 # The API drops connections that don't look like they come from wnba.com.
@@ -50,18 +54,22 @@ def raw_path(raw_dir: Path, season: int, season_type: str) -> Path:
     return raw_dir / f"{season}_{season_type}.csv"
 
 
-def _get(endpoint: str, params: dict, *, retries: int = 3, timeout: float = 45) -> dict[str, list[dict]]:
-    """Call a stats API endpoint and return its result sets as {name: [row dicts]}."""
+def _get_json(endpoint: str, params: dict, *, retries: int = 3, timeout: float = 45) -> dict:
     request = urllib.request.Request(f"{API_URL}/{endpoint}?{urllib.parse.urlencode(params)}", headers=REQUEST_HEADERS)
     for attempt in range(1, retries + 1):
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                result_sets = json.load(response)["resultSets"]
-            return {rs["name"]: [dict(zip(rs["headers"], row)) for row in rs["rowSet"]] for rs in result_sets}
+                return json.load(response)
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt == retries:
                 raise RuntimeError(f"{endpoint} {params} failed after {retries} attempts: {e}") from e
             time.sleep(5 * attempt)
+
+
+def _get(endpoint: str, params: dict) -> dict[str, list[dict]]:
+    """Call a stats API endpoint and return its result sets as {name: [row dicts]}."""
+    result_sets = _get_json(endpoint, params)["resultSets"]
+    return {rs["name"]: [dict(zip(rs["headers"], row)) for row in rs["rowSet"]] for rs in result_sets}
 
 
 def fetch_game_log(season: int, season_type: str, level: str) -> list[dict]:
@@ -201,13 +209,40 @@ def _points_mismatches(team_rows: list[dict], player_rows: list[dict]) -> set[st
     return {r["GAME_ID"] for r in team_rows if player_totals[(r["GAME_ID"], int(r["TEAM_ID"]))] != int(r["PTS"])}
 
 
-def save_game_log(path: Path, rows: list[dict], headers: list[str]) -> None:
+def fetch_schedule(season: int) -> list[dict]:
+    """Every game on the season's schedule, played or not, in a flat format.
+
+    Playoff games whose teams aren't decided yet have team IDs of 0. Seeds are
+    only set for playoff games.
+    """
+    schedule = _get_json("scheduleleaguev2", {"LeagueID": "10", "Season": season})["leagueSchedule"]
+    rows = []
+    for game_date in schedule.get("gameDates", []):
+        for g in game_date["games"]:
+            home, away = g["homeTeam"], g["awayTeam"]
+            rows.append({
+                "GAME_ID": g["gameId"],
+                "GAME_DATE": g["gameDateEst"][:10],
+                "GAME_STATUS": g["gameStatus"],  # 1 scheduled, 2 in progress, 3 final
+                "HOME_TEAM_ID": home["teamId"],
+                "AWAY_TEAM_ID": away["teamId"],
+                "HOME_SEED": home.get("seed") or "",
+                "AWAY_SEED": away.get("seed") or "",
+                "GAME_LABEL": g["gameLabel"],
+                "GAME_SUB_LABEL": g["gameSubLabel"],
+                "IF_NECESSARY": int(g["ifNecessary"] in (True, "true")),
+            })
+    return rows
+
+
+def save_csv(path: Path, rows: list[dict], headers: list[str]) -> None:
+    """Write rows sorted by date and IDs, so re-fetching unchanged data gives an identical file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    id_col = "PLAYER_ID" if "PLAYER_ID" in headers else "TEAM_ID"
+    sort_cols = [c for c in ("GAME_DATE", "GAME_ID", "TEAM_ID", "PLAYER_ID") if c in headers]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
-        writer.writerows(sorted(rows, key=lambda r: (r["GAME_DATE"], r["GAME_ID"], r["TEAM_ID"], r[id_col])))
+        writer.writerows(sorted(rows, key=lambda r: tuple(int(r[c]) if c.endswith("ID") else r[c] for c in sort_cols)))
 
 
 def fetch_seasons(
@@ -218,12 +253,14 @@ def fetch_seasons(
     delay: float = 1.0,
     team_dir: Path = RAW_TEAM_GAMES_DIR,
     player_dir: Path = RAW_PLAYER_GAMES_DIR,
+    schedule_dir: Path = RAW_SCHEDULE_DIR,
 ) -> dict[tuple[int, str], tuple[int, int]]:
     """Download game logs, skipping past seasons already on disk unless force=True.
 
     The current calendar year's season is always re-downloaded since it may
-    still be in progress. Returns (team rows, player rows) saved per
-    (season, season_type); seasons with no games yet are (0, 0) and not saved.
+    still be in progress, along with its schedule (upcoming games and playoff
+    seeds). Returns (team rows, player rows) saved per (season, season_type);
+    seasons with no games yet are (0, 0) and not saved.
     """
     current_season = date.today().year
     saved = {}
@@ -235,9 +272,15 @@ def fetch_seasons(
                 continue
             team_rows, player_rows = fetch_season(season, season_type, delay)
             if team_rows:
-                save_game_log(team_path, team_rows, TEAM_LOG_HEADERS)
-                save_game_log(player_path, player_rows, PLAYER_LOG_HEADERS)
+                save_csv(team_path, team_rows, TEAM_LOG_HEADERS)
+                save_csv(player_path, player_rows, PLAYER_LOG_HEADERS)
             saved[(season, season_type)] = (len(team_rows), len(player_rows))
             print(f"{season} {season_type}: {len(team_rows)} team games, {len(player_rows)} player games")
             time.sleep(delay)
+
+    if current_season in seasons:
+        schedule = fetch_schedule(current_season)
+        if schedule:
+            save_csv(schedule_dir / f"{current_season}.csv", schedule, SCHEDULE_HEADERS)
+        print(f"{current_season} schedule: {sum(r['GAME_STATUS'] != 3 for r in schedule)} games not yet final")
     return saved

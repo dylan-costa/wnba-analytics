@@ -1,11 +1,13 @@
-"""Command-line entry point: `wnba fetch`, `wnba build`, `wnba update`, `wnba standings`, `wnba leaders`."""
+"""Command-line entry point. Data: fetch, build, update. Stats: standings, leaders.
+Models: ratings, predict, simulate, backtest."""
 
 import argparse
+import math
 import traceback
 from contextlib import closing
 from datetime import date, datetime
 
-from wnba import db, fetch
+from wnba import db, elo, fetch, gitsync, predict, simulate
 from wnba.config import API_SEASON_TYPES, DB_PATH, DEFAULT_SEASON_TYPES, FIRST_SEASON, UPDATE_LOG_PATH
 
 
@@ -48,8 +50,13 @@ def cmd_update(args: argparse.Namespace) -> None:
         f"{season} {season_type}: {n_team} team/{n_player} player rows"
         for (season, season_type), (n_team, n_player) in fetched.items()
     )
-    log(f"ok: {counts['games']:,} games in db (fetched {fetched_summary or 'nothing'})")
-    print(f"Updated {DB_PATH}: {counts['games']:,} games")
+    message = f"ok: {counts['games']:,} games in db (fetched {fetched_summary or 'nothing'})"
+    if args.push:
+        with closing(db.connect()) as conn:
+            latest = conn.execute("SELECT MAX(game_date) FROM games").fetchone()[0]
+        message += f"; git: {gitsync.push_raw_data(f'Update game data through {latest}')}"
+    log(message)
+    print(message)
 
 
 def cmd_standings(args: argparse.Namespace) -> None:
@@ -82,6 +89,98 @@ def cmd_leaders(args: argparse.Namespace) -> None:
         )
 
 
+def _pct(p: float | None) -> str:
+    if p is None:
+        return "-"
+    return "<1%" if 0 < p < 0.005 else ">99%" if 0.995 <= p < 1 else f"{p:.0%}"
+
+
+def _spread_text(abbr_home: str, abbr_away: str, home_spread: float) -> str:
+    favorite, points = (abbr_home, home_spread) if home_spread >= 0 else (abbr_away, -home_spread)
+    return f"{favorite} -{points:.1f}"
+
+
+def cmd_ratings(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        state = predict.model_state(conn)
+        records = {
+            r["team_id"]: (r["wins"], r["losses"])
+            for r in conn.execute("SELECT team_id, wins, losses FROM team_season_stats WHERE season = ? AND season_type = 'regular'", (state.season,))
+        }
+    print(f"Elo ratings going into the next {state.season} game (home advantage {state.home_advantage:.0f} Elo points)")
+    print(f"{'#':>2}  {'Team':<5} {'Elo':>5}  {'W-L':>5}")
+    for rank, (team, rating) in enumerate(sorted(state.ratings.items(), key=lambda kv: -kv[1]), 1):
+        w, l = records.get(team, (0, 0))
+        print(f"{rank:>2}  {state.abbreviations[team]:<5} {rating:>5.0f}  {w:>2}-{l:<2}")
+
+
+def cmd_predict(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        state = predict.model_state(conn)
+        if args.home:
+            if not args.away:
+                raise SystemExit("Give both teams: wnba predict HOME AWAY")
+            games = [(None, "", state.team_id(args.home), state.team_id(args.away), 0)]
+        else:
+            games = [(g["game_date"], g["label"], g["home_team_id"], g["away_team_id"], g["if_necessary"]) for g in predict.upcoming_games(conn)]
+    if not games:
+        print("No upcoming games with both teams set. Try: wnba predict HOME AWAY")
+        return
+    print(f"{'Date':<10}  {'Game':<31} {'Matchup':<11} {'Home win':>8}  {'Spread':<10}")
+    for game_date, label, home, away, if_necessary in games:
+        p = predict.predict_game(state, home, away, neutral=args.neutral)
+        abbr_home, abbr_away = state.abbreviations[home], state.abbreviations[away]
+        label = f"{label} (if nec.)" if if_necessary else label
+        matchup = f"{abbr_away} {'vs' if args.neutral else '@'} {abbr_home}"
+        print(f"{game_date or '':<10}  {label:<31} {matchup:<11} {p.home_win_prob:>8.0%}  {_spread_text(abbr_home, abbr_away, p.home_spread):<10}")
+
+
+def cmd_simulate(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        outlook = simulate.simulate_season(conn, args.season, args.as_of, args.sims, args.seed)
+    when = f"as of {outlook.as_of}" if outlook.as_of else "from today"
+    print(f"{outlook.season} {when}: {outlook.remaining_regular_season_games} regular-season games left, {outlook.simulations:,} simulations")
+    season_left = outlook.remaining_regular_season_games > 0
+    header = f"{'Team':<5} {'Seed':>4} {'Elo':>5}  {'W-L':>5}"
+    if season_left:
+        header += f"  {'Proj W-L':>9}"
+    if outlook.playoffs_simulated:
+        header += f"  {'Playoffs':>8} {'Semis':>6} {'Finals':>6} {'Title':>6}"
+    print(header)
+    for t in outlook.teams:
+        line = f"{t.abbreviation:<5} {t.seed or '':>4} {t.rating:>5.0f}  {t.wins:>2}-{t.losses:<2}"
+        if season_left:
+            line += f"  {t.projected_wins:>4.1f}-{t.projected_losses:<4.1f}"
+        if outlook.playoffs_simulated:
+            sp = t.stage_probs
+            line += f"  {_pct(t.playoff_prob):>8} {_pct(sp['Semifinals']):>6} {_pct(sp['Finals']):>6} {_pct(sp['Champion']):>6}"
+        print(line)
+    if not outlook.playoffs_simulated:
+        print(f"(Playoffs are only simulated for {simulate.PLAYOFF_FORMAT_SINCE}+, which use the current format.)")
+
+
+def cmd_backtest(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        games = elo.load_games(conn)
+    train, test = elo.TRAIN_SEASONS, range(elo.TRAIN_SEASONS.stop, date.today().year + 1)
+    if args.tune:
+        print(f"Tuning on {train.start}-{train.stop - 1} ({math.prod(len(v) for v in elo.TUNING_GRID.values())} combinations)...")
+        for log_loss, params in elo.tune(games, train)[:5]:
+            print(f"  log loss {log_loss:.4f}  {params}")
+        print()
+    rated, _ = elo.run(games)
+    print(f"{'Seasons':<11} {'Games':<9} {'N':>5}  {'Log loss':>8} {'Baseline':>8} {'Brier':>6} {'Correct':>7}  {'Spread RMSE':>11}")
+    for seasons in (train, test):
+        for season_type in ("regular", "playoffs", None):
+            subset = [g for g in rated if g.season in seasons and season_type in (None, g.season_type)]
+            e = elo.evaluate(subset, elo.MARGIN_SD)
+            print(f"{seasons.start}-{seasons.stop - 1:<6} {season_type or 'all':<9} {e.games:>5}  {e.log_loss:>8.4f} {e.baseline_log_loss:>8.4f} "
+                  f"{e.brier:>6.3f} {e.accuracy:>7.1%}  {e.spread_rmse:>11.1f}")
+    print(f"\nCalibration, {test.start}-{test.stop - 1} (predicted vs actual home win rate):")
+    for predicted, actual, n in elo.calibration([g for g in rated if g.season in test]):
+        print(f"  {predicted:>5.1%} -> {actual:>5.1%}  ({n} games)")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="wnba", description=__doc__)
     sub = parser.add_subparsers(required=True)
@@ -96,6 +195,7 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("update", help="fetch new games and rebuild the database (what the daily task runs)")
+    p.add_argument("--push", action="store_true", help="then commit changed files in data/raw and push them")
     p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("standings", help="print a season's standings and team ratings")
@@ -108,6 +208,26 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--playoffs", action="store_true")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(func=cmd_leaders)
+
+    p = sub.add_parser("ratings", help="print current Elo ratings")
+    p.set_defaults(func=cmd_ratings)
+
+    p = sub.add_parser("predict", help="win probability and spread for upcoming games, or for HOME vs AWAY")
+    p.add_argument("home", nargs="?", help="home team abbreviation, e.g. MIN")
+    p.add_argument("away", nargs="?", help="away team abbreviation")
+    p.add_argument("--neutral", action="store_true", help="no home-court advantage")
+    p.set_defaults(func=cmd_predict)
+
+    p = sub.add_parser("simulate", help="Monte Carlo odds for the rest of the season and the playoffs")
+    p.add_argument("--season", type=int, help="default: the latest season")
+    p.add_argument("--as-of", metavar="YYYY-MM-DD", help="replay a past season from this date")
+    p.add_argument("--sims", type=int, default=10_000)
+    p.add_argument("--seed", type=int, help="random seed, for repeatable results")
+    p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("backtest", help="score the Elo model's past predictions")
+    p.add_argument("--tune", action="store_true", help="also re-run the parameter grid search")
+    p.set_defaults(func=cmd_backtest)
 
     args = parser.parse_args(argv)
     args.func(args)

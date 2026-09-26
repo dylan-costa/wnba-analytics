@@ -88,6 +88,40 @@ CREATE TABLE player_games (
     PRIMARY KEY (game_id, player_id)
 );
 
+-- Games on the current season's schedule that haven't been played yet.
+-- Playoff games whose teams aren't decided yet have NULL team IDs.
+CREATE TABLE schedule (
+    game_id      TEXT    PRIMARY KEY,
+    season       INTEGER NOT NULL,
+    season_type  TEXT    NOT NULL CHECK (season_type IN ('regular', 'playoffs')),
+    game_date    TEXT    NOT NULL,
+    home_team_id INTEGER,
+    away_team_id INTEGER,
+    label        TEXT    NOT NULL,  -- e.g. "First Round Game 3"
+    if_necessary INTEGER NOT NULL
+);
+
+-- Playoff seeds from the league schedule (for seasons whose schedule was fetched).
+CREATE TABLE playoff_seeds (
+    season  INTEGER NOT NULL,
+    seed    INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    PRIMARY KEY (season, seed)
+);
+
+-- Elo ratings before and after every game and the pre-game prediction (see
+-- elo.py). Forfeits aren't rated.
+CREATE TABLE elo_games (
+    game_id        TEXT PRIMARY KEY REFERENCES games (game_id),
+    home_elo_pre   REAL NOT NULL,
+    away_elo_pre   REAL NOT NULL,
+    home_advantage REAL NOT NULL,  -- Elo points, 0 for the 2020 bubble
+    home_win_prob  REAL NOT NULL,
+    home_spread    REAL NOT NULL,  -- predicted home margin in points
+    home_elo_post  REAL NOT NULL,
+    away_elo_post  REAL NOT NULL
+);
+
 CREATE INDEX idx_games_season ON games (season, season_type);
 CREATE INDEX idx_team_games_team ON team_games (team_id, season, season_type);
 CREATE INDEX idx_player_games_player ON player_games (player_id, season, season_type);
