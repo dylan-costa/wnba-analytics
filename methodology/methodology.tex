@@ -1,0 +1,466 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------------------
+% Model parameters. These mirror the constants in the code; if you change one
+% here, change it there too (see Appendix A for where each one lives).
+% ---------------------------------------------------------------------------
+\newcommand{\Kval}{30}             % K-factor                      (elo.py: EloParams.k)
+\newcommand{\carry}{0.5}           % between-season carryover c    (EloParams.carryover)
+\newcommand{\rnew}{1300}           % new-team rating               (EloParams.new_team_rating)
+\newcommand{\rmean}{1500}          % league mean                   (EloParams.mean)
+\newcommand{\Hwin}{5}              % home-advantage window W       (EloParams.home_advantage_seasons)
+\newcommand{\Hinit}{75}            % initial home advantage        (EloParams.initial_home_advantage)
+\newcommand{\sigmaval}{11}         % margin standard deviation     (elo.py: MARGIN_SD)
+\newcommand{\Nsims}{20{,}000}      % simulations per forecast      (forecast.py: update_forecast)
+\newcommand{\trainyears}{1997--2018}
+\newcommand{\testyears}{2019--2026}
+
+% Notation
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\logit}{\operatorname{logit}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\ind}{\mathbf{1}}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}[proposition]{Lemma}
+\newtheorem{corollary}[proposition]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{algorithm}{Algorithm}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newtheorem{example}{Example}
+
+\title{Rating, Prediction, and Monte Carlo Simulation of WNBA Games:\\ Methodology of the \texttt{wnba-analytics} Forecast}
+\author{Dylan Costa}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We describe the statistical methodology behind a daily forecast of the Women's National Basketball Association (WNBA). Team strength is estimated with an Elo rating system, which we interpret as online stochastic gradient ascent on a Bradley--Terry likelihood, augmented with a margin-of-victory multiplier, between-season shrinkage toward the league mean, and a home-court advantage estimated from preceding seasons. Pre-game win probabilities are mapped to point spreads through a Gaussian margin model constructed to agree exactly with the Elo probabilities. Season and playoff outcomes are obtained by Monte Carlo simulation in which ratings evolve within each simulated trajectory; we show that this induces positive dependence among a team's future results and hence overdispersion relative to a model with fixed ratings. Parameters are selected by minimizing log loss on the \trainyears{} seasons, and predictive performance is reported on the held-out \testyears{} seasons.
+\end{abstract}
+
+\tableofcontents
+
+% ===========================================================================
+\section{Introduction}
+% ===========================================================================
+
+The forecast is produced by a pipeline with four stages:
+\begin{enumerate}
+  \item \textbf{Data.} Every regular-season and playoff game since 1997, with team and player box scores, is retrieved from the league's statistics service and loaded into a relational database after validation (Section~\ref{sec:data}).
+  \item \textbf{Ratings.} Each team carries a real-valued rating updated after every game (Section~\ref{sec:elo}).
+  \item \textbf{Prediction.} Ratings are converted into a win probability and an expected margin for any matchup (Section~\ref{sec:margin}).
+  \item \textbf{Simulation.} The remainder of the season, including the playoffs, is simulated many times to estimate the probability of each outcome (Section~\ref{sec:sim}).
+\end{enumerate}
+Section~\ref{sec:forecast} describes how forecasts are refreshed and evaluated prospectively, and Section~\ref{sec:limits} discusses limitations and extensions. Appendix~\ref{app:params} maps each parameter to its location in the source code, and Appendix~\ref{app:example} works through a complete numerical example.
+
+% ===========================================================================
+\section{Data and notation}\label{sec:data}
+% ===========================================================================
+
+A game $g$ is a tuple $(s_g, t_g, h_g, a_g, m_g)$ consisting of a season $s_g$, a date $t_g$, a home team $h_g$, an away team $a_g$, and the home margin $m_g = \text{(home points)} - \text{(away points)} \in \mathbb{Z}\setminus\{0\}$. The outcome is $y_g = \ind\{m_g > 0\}$. Games are processed in chronological order (ties in date broken by game identifier).
+
+Before any modelling, the database build enforces the following invariants and refuses to load data that violate them:
+\begin{itemize}
+  \item every game has exactly one home and one away record, which agree on season, season type, and date;
+  \item the recorded win/loss agrees with the score;
+  \item within each team and game, player points sum to the team's points, except for seven 1997--2000 games in which the league's own player box scores differ from the official final score by one to three points (flagged) and one game whose player box score is unusable (excluded from player data).
+\end{itemize}
+One game, a 2018 forfeit, has no score; it counts in the standings but is excluded from everything below. The 2020 season was played at a single neutral site and is treated as having no home-court advantage.
+
+% ===========================================================================
+\section{The Elo rating system}\label{sec:elo}
+% ===========================================================================
+
+\subsection{Probability model}
+
+Following Elo \cite{elo1978}, each team $i$ has a rating $r_i \in \mathbb{R}$. For a game between home team $h$ and away team $a$ in season $s$, with home-court advantage $H_s$ (in rating points, Section~\ref{sec:hca}), define the \emph{edge}
+\begin{equation}\label{eq:edge}
+  \Delta = r_h - r_a + H_s,
+\end{equation}
+and the pre-game home win probability
+\begin{equation}\label{eq:winprob}
+  p = \Prob(y = 1) = \frac{1}{1 + 10^{-\Delta/400}} = \lambda\!\left(\beta\Delta\right),
+  \qquad \lambda(x) = \frac{1}{1+e^{-x}}, \quad \beta = \frac{\ln 10}{400}.
+\end{equation}
+
+\begin{proposition}[Bradley--Terry form]\label{prop:bt}
+Let $\pi_i = 10^{r_i/400}$ and $\kappa_s = 10^{H_s/400}$. Then
+\[
+  p = \frac{\kappa_s \pi_h}{\kappa_s \pi_h + \pi_a}.
+\]
+\end{proposition}
+\begin{proof}
+Dividing numerator and denominator by $\kappa_s\pi_h$,
+\[
+  \frac{\kappa_s \pi_h}{\kappa_s \pi_h + \pi_a} = \Bigl(1 + \frac{\pi_a}{\kappa_s \pi_h}\Bigr)^{-1} = \bigl(1 + 10^{(r_a - r_h - H_s)/400}\bigr)^{-1},
+\]
+which is \eqref{eq:winprob}.
+\end{proof}
+
+Ratings are therefore log-strengths in a Bradley--Terry model \cite{bradley1952}, on a base-10 scale with unit 400, and home court acts multiplicatively on the home team's strength. The model depends on ratings only through differences, so ratings are identified up to an additive constant; the convention that the league averages $\rmean$ fixes it. An edge of 400 corresponds to odds of $10\!:\!1$, and an edge of 100 to a win probability of about $0.64$.
+
+\subsection{Update rule}
+
+After game $g$ the ratings of the two participants are updated by
+\begin{equation}\label{eq:update}
+  r_h \leftarrow r_h + \delta_g, \qquad r_a \leftarrow r_a - \delta_g, \qquad
+  \delta_g = K \, M(m_g, \Delta_g)\, (y_g - p_g),
+\end{equation}
+where $K = \Kval$ is the \emph{K-factor} and $M$ is a margin-of-victory multiplier defined in Section~\ref{sec:mov}. All other ratings are unchanged.
+
+\begin{lemma}[Conservation]
+Within a season, $\sum_i r_i$ is invariant under \eqref{eq:update}.
+\end{lemma}
+\begin{proof}
+The update adds $\delta_g$ to one rating and subtracts it from another.
+\end{proof}
+
+The next result explains why \eqref{eq:update} is a sensible estimator.
+
+\begin{proposition}[Elo as stochastic gradient ascent]\label{prop:sgd}
+Let $\ell_g(r) = y_g \log p_g + (1-y_g)\log(1-p_g)$ be the Bernoulli log-likelihood of game $g$ under \eqref{eq:winprob}. Then
+\[
+  \frac{\partial \ell_g}{\partial r_h} = -\frac{\partial \ell_g}{\partial r_a} = \beta\,(y_g - p_g).
+\]
+Consequently, with $M \equiv 1$, the update \eqref{eq:update} is one step of stochastic gradient ascent on the Bradley--Terry log-likelihood with learning rate $\eta = K/\beta = 400K/\ln 10$.
+\end{proposition}
+\begin{proof}
+Write $p = \lambda(\beta\Delta)$ and use $\lambda'(x) = \lambda(x)(1-\lambda(x))$. Then $\partial p/\partial r_h = \beta p(1-p)$ and
+\[
+  \frac{\partial \ell}{\partial r_h} = \left(\frac{y}{p} - \frac{1-y}{1-p}\right)\beta p (1-p) = \beta\bigl(y(1-p) - (1-y)p\bigr) = \beta (y - p).
+\]
+The derivative with respect to $r_a$ has the opposite sign because $\partial\Delta/\partial r_a = -1$.
+\end{proof}
+
+\begin{remark}[State-space interpretation]
+If true strengths were constant, the iterates of \eqref{eq:update} would fluctuate around the maximum-likelihood estimate, with stationary dispersion increasing in $K$. In practice strengths drift within and between seasons. A more faithful description is a state-space model in which latent strength follows a random walk, $\theta_{i,t+1} = \theta_{i,t} + \omega_{i,t}$, observed through Bradley--Terry outcomes. Elo is then a filter with a fixed gain: $K$ encodes the ratio of strength drift to single-game noise. Glicko \cite{glickman1999} makes this gain adaptive by tracking a rating variance for each team; the present system does not.
+\end{remark}
+
+\subsection{Margin-of-victory multiplier}\label{sec:mov}
+
+The outcome $y_g$ discards the margin. Following FiveThirtyEight's NBA model \cite{silver2015}, we set
+\begin{equation}\label{eq:mov}
+  M(m, \Delta) = \frac{(|m| + 3)^{0.8}}{7.5 + 0.006\,\Delta_w},
+  \qquad
+  \Delta_w = \begin{cases} \Delta & m > 0 \text{ (home team won)},\\ -\Delta & m < 0 \text{ (away team won)},\end{cases}
+\end{equation}
+so $\Delta_w$ is the winner's pre-game edge. The numerator is increasing and concave in $|m|$, so larger wins count for more but with diminishing returns, and the offset $3$ prevents one-point games from being nearly uninformative.
+
+The denominator addresses a bias that arises because the margin is correlated with the pre-game edge. Fix a game with edge $\Delta$ and write $M_1 = \E[M \mid y=1]$ and $M_0 = \E[M \mid y = 0]$.
+
+\begin{proposition}[Drift of the weighted update]\label{prop:drift}
+If $y \sim \mathrm{Bernoulli}(p)$ with $p$ the true win probability, then
+\[
+  \E[\delta] = K\,p(1-p)\,(M_1 - M_0).
+\]
+In particular the update has zero drift for a correctly rated team if and only if $M_1 = M_0$.
+\end{proposition}
+\begin{proof}
+$\E[M(y-p)] = p\,\E[M\mid y=1](1-p) + (1-p)\,\E[M \mid y = 0](-p) = p(1-p)(M_1 - M_0)$.
+\end{proof}
+
+A favorite ($\Delta > 0$) tends both to win more often and to win by larger margins than it loses by, so with the numerator alone $M_1 > M_0$ and the favorite's rating drifts upward even when correctly estimated; this is the autocorrelation that inflates favorites' ratings. The denominator of \eqref{eq:mov} is increasing in $\Delta_w$: it shrinks $M$ when the favorite wins and enlarges it when the favorite loses, pushing $M_1 - M_0$ toward zero. The constants $3$, $0.8$, $7.5$, and $0.006$ are those published for the NBA and have not been re-estimated for the WNBA.
+
+\subsection{Between-season regression and new teams}
+
+When a team plays its first game of season $s$, its rating is reset according to
+\begin{equation}\label{eq:carryover}
+  r_i \leftarrow
+  \begin{cases}
+    \mu + c\,(r_i - \mu) & \text{if $i$ played in season } s-1,\\
+    r_{\mathrm{new}} & \text{otherwise},
+  \end{cases}
+\end{equation}
+with $\mu = \rmean$, $c = \carry$, and $r_{\mathrm{new}} = \rnew$. The second case covers expansion franchises and franchises returning after an absence.
+
+\begin{remark}[Shrinkage interpretation]
+Suppose that at the end of a season a team's strength is estimated by $r_i$, and that offseason roster turnover perturbs strength so that, a priori, next season's strength is centered on the league mean with variance $\tau^2$, while the information carried over has variance $\nu^2$. The Gaussian posterior mean is $\mu + \frac{\tau^2}{\tau^2 + \nu^2}(r_i - \mu)$, which has the form \eqref{eq:carryover} with $c = \tau^2/(\tau^2+\nu^2)$. The selected value $c = \carry$ indicates that roughly half of a team's deviation from the mean persists from one season to the next.
+\end{remark}
+
+\subsection{Home-court advantage}\label{sec:hca}
+
+Home-court advantage in the WNBA has declined: home teams won $60.4\%$ of regular-season games in 1997--2007 and $59.8\%$ in 2008--2018 (mean home margins $+3.3$ and $+3.0$ points), but $54.7\%$ in 2019--2026 excluding 2020 (mean margin $+1.75$). A constant $H$ fitted to the early seasons overstates the recent advantage. We therefore set $H_s$ from the preceding seasons only. Let $\bar m_s$ denote the mean home margin over all games of the most recent $W = \Hwin$ non-neutral seasons before $s$. Using the Gaussian margin model of Section~\ref{sec:margin}, the Elo edge whose win probability matches a margin distribution centered at $\bar m_s$ is
+\begin{equation}\label{eq:hca}
+  H_s = 400\log_{10}\frac{\Phi(\bar m_s/\sigma)}{1 - \Phi(\bar m_s/\sigma)} = \frac{1}{\beta}\,\logit\,\Phi(\bar m_s/\sigma),
+\end{equation}
+where $\Phi$ is the standard normal distribution function and $\sigma = \sigmaval$. By construction $\lambda(\beta H_s) = \Phi(\bar m_s/\sigma)$. $H_s$ is held fixed throughout season $s$, so it never uses games from the season being predicted. For the first season (1997), where no history exists, $H = \Hinit$. For the 2020 bubble season, $H_{2020} = 0$. The resulting advantage fell from about 78 rating points in 2015 to 43 in 2026.
+
+\begin{proposition}[Rating points per point of margin]\label{prop:slope}
+Let $\mu(\Delta) = \sigma\,\Phi^{-1}\!\bigl(\lambda(\beta\Delta)\bigr)$ be the expected margin implied by an edge $\Delta$ (Section~\ref{sec:margin}). Then
+\[
+  \mu'(0) = \frac{\sigma\beta}{4\,\varphi(0)} = \frac{\sigma \ln 10\,\sqrt{2\pi}}{1600},
+\]
+where $\varphi$ is the standard normal density. For $\sigma = \sigmaval$, $\mu'(0) \approx 0.0397$, i.e.\ one point of expected margin corresponds to approximately 25 rating points near an even matchup.
+\end{proposition}
+\begin{proof}
+By the chain rule, $\mu'(\Delta) = \sigma\,\frac{1}{\varphi(\Phi^{-1}(p))}\,\beta p(1-p)$ with $p = \lambda(\beta\Delta)$. At $\Delta = 0$, $p = 1/2$, $\Phi^{-1}(1/2) = 0$, and $p(1-p) = 1/4$.
+\end{proof}
+
+Thus $H_{2026} = 43$ corresponds to roughly $1.7$ points of home advantage.
+
+\subsection{Parameter selection and evaluation}\label{sec:fit}
+
+The free parameters $(K, c, r_{\mathrm{new}}, W)$ were chosen by exhaustive search over the grid
+\[
+  K \in \{20, 25, 30\},\quad c \in \{0.4, 0.5, 0.6, 0.7\},\quad r_{\mathrm{new}} \in \{1300, 1350, 1400, 1450\},\quad W \in \{1, 2, 3, 5\},
+\]
+minimizing the mean log loss
+\begin{equation}\label{eq:logloss}
+  L = -\frac{1}{n}\sum_{g=1}^{n} \bigl[y_g \log p_g + (1-y_g)\log(1-p_g)\bigr]
+\end{equation}
+over games of the \trainyears{} seasons. Ratings are run over all games in every configuration, so that early seasons serve as burn-in; only the scoring is restricted. The selected parameters were then evaluated, without further adjustment, on the \testyears{} seasons.
+
+\begin{proposition}[Log loss is strictly proper]
+If $y \sim \mathrm{Bernoulli}(q)$, the expected score $S(p) = -\E[y\log p + (1-y)\log(1-p)]$ is uniquely minimized over $p \in (0,1)$ at $p = q$.
+\end{proposition}
+\begin{proof}
+$S(p) = -q\log p - (1-q)\log(1-p)$ is strictly convex with $S'(p) = -q/p + (1-q)/(1-p)$, which vanishes only at $p = q$.
+\end{proof}
+
+Strict propriety \cite{gneiting2007} is what makes log loss the appropriate objective for probability forecasts: in expectation it rewards reporting the true probability, whereas accuracy is insensitive to confidence. As a reference we use the constant forecast $p_g \equiv \bar y$ (the overall home win rate of the evaluated games), whose log loss is the binary entropy $-\bar y\log\bar y - (1-\bar y)\log(1-\bar y)$. We also report the Brier score $n^{-1}\sum_g (p_g - y_g)^2$ and accuracy $n^{-1}\sum_g \ind\{(p_g > \tfrac12) = y_g\}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrrrr}
+\toprule
+Seasons & Games & Log loss & Baseline & Brier & Accuracy & Spread RMSE \\
+\midrule
+\trainyears{} (tuning) & 5{,}023 & 0.621 & 0.672 & 0.216 & 65.8\% & 11.7 \\
+\testyears{} (held out) & 1{,}977 & 0.608 & 0.688 & 0.210 & 67.5\% & 12.7 \\
+\bottomrule
+\end{tabular}
+\caption{Predictive performance of pre-game probabilities. Spread RMSE is in points (Section~\ref{sec:margin}).}
+\label{tab:backtest}
+\end{table}
+
+A forecaster is \emph{calibrated} if $\Prob(y = 1 \mid p = u) = u$ for all $u$. Table~\ref{tab:calibration} bins held-out games by predicted home win probability. Agreement is within about two percentage points for home favorites; home underdogs win somewhat less often than predicted, consistent with a residual lag in the home-advantage estimate during its recent decline.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrr}
+\toprule
+Mean predicted & Observed & Games \\
+\midrule
+16.8\% & 12.5\% & 40 \\
+25.5\% & 22.3\% & 139 \\
+35.5\% & 30.6\% & 232 \\
+45.2\% & 41.6\% & 305 \\
+55.2\% & 56.1\% & 351 \\
+65.1\% & 63.4\% & 383 \\
+74.8\% & 73.5\% & 309 \\
+83.8\% & 85.1\% & 202 \\
+91.6\% & 87.5\% & 16 \\
+\bottomrule
+\end{tabular}
+\caption{Calibration on the held-out \testyears{} seasons, binned by predicted home win probability in intervals of ten percentage points.}
+\label{tab:calibration}
+\end{table}
+
+% ===========================================================================
+\section{Point spreads and the margin model}\label{sec:margin}
+% ===========================================================================
+
+Simulation requires a margin as well as a winner, because the in-simulation rating update \eqref{eq:update} depends on $M(m,\Delta)$. We model the home margin as Gaussian with its mean chosen to reproduce the Elo probability exactly.
+
+\begin{definition}[Margin model]
+Given a pre-game home win probability $p$, the home margin is
+\begin{equation}\label{eq:margin}
+  X \sim \mathcal{N}(\mu, \sigma^2), \qquad \mu = \sigma\,\Phi^{-1}(p), \qquad \sigma = \sigmaval.
+\end{equation}
+The quantity $\mu$ is reported as the point spread.
+\end{definition}
+
+\begin{proposition}[Exact agreement with Elo]\label{prop:exact}
+Under \eqref{eq:margin}, $\Prob(X > 0) = p$.
+\end{proposition}
+\begin{proof}
+$\Prob(X>0) = \Prob\bigl(Z > -\mu/\sigma\bigr) = \Phi(\mu/\sigma) = \Phi(\Phi^{-1}(p)) = p$, with $Z$ standard normal.
+\end{proof}
+
+\begin{remark}
+Equation \eqref{eq:margin} uses a probit link to re-express a probability produced by a logistic model. Since the probability itself is matched, not the link function, the mismatch between $\Phi$ and $\lambda$ (recall $\Phi(x) \approx \lambda(1.702\,x)$) has no effect on win probabilities; it only determines how probabilities translate into spreads.
+\end{remark}
+
+\paragraph{Estimating $\sigma$.} Writing $z_g = \Phi^{-1}(p_g)$, model \eqref{eq:margin} says $\E[m_g] = \sigma z_g$, a regression through the origin. The least-squares estimate is
+\begin{equation}\label{eq:sigmahat}
+  \hat\sigma = \frac{\sum_g m_g z_g}{\sum_g z_g^2},
+\end{equation}
+which equals $10.9$ on all rated games; we use $\sigma = \sigmaval$.
+
+\paragraph{A diagnostic.} If \eqref{eq:margin} held exactly, the residual standard deviation $\bigl(n^{-1}\sum_g (m_g - \sigma z_g)^2\bigr)^{1/2}$ would also be close to $\sigma$. It is $12.0$ on all games, somewhat larger than $\hat\sigma$. Realized margins are therefore more dispersed around the spread than the model implies, reflecting heavier tails, rating uncertainty, or both. Because $\mu$ is matched to $p$, this affects simulated margins but not simulated win probabilities.
+
+% ===========================================================================
+\section{Monte Carlo simulation}\label{sec:sim}
+% ===========================================================================
+
+\subsection{A single simulated game}
+
+\begin{algorithm}[Simulated game]\label{alg:game}
+Given the current simulated ratings $r_h, r_a$ and the season's home advantage $H_s$:
+\begin{enumerate}
+  \item Compute $\Delta = r_h - r_a + H_s$ and $p = \lambda(\beta\Delta)$.
+  \item Draw $X \sim \mathcal{N}\bigl(\sigma\Phi^{-1}(p), \sigma^2\bigr)$. The home team wins if and only if $X > 0$.
+  \item Round to an integer margin $m = \sgn(X)\,\max\{1, \operatorname{round}|X|\}$, which excludes ties.
+  \item Apply the update \eqref{eq:update} with margin $m$ to the simulated ratings.
+\end{enumerate}
+\end{algorithm}
+
+By Proposition~\ref{prop:exact}, the simulated home win probability is exactly $p$. Each simulation run begins from the ratings produced by all games actually played, with the between-season adjustment \eqref{eq:carryover} applied if the season has not yet started.
+
+\subsection{Rating dynamics within a simulation}
+
+Because step 4 updates the ratings, the ratings within one run form a Markov chain driven by the simulated results. This is deliberate: the current rating is an estimate, not the true strength, and letting it evolve within each run propagates that uncertainty into the outcome distribution. The effect can be made precise.
+
+\begin{proposition}[Positive dependence]\label{prop:cov}
+Let $Y_1$ and $Y_2$ indicate that team $i$ wins its next two simulated games, against distinct opponents $j$ and $k$, with no game in between involving $i$ or $k$. Then $\Cov(Y_1, Y_2) > 0$.
+\end{proposition}
+\begin{proof}
+Let $r_i$ be $i$'s rating before game 1 and $r_i'$ its rating after. By \eqref{eq:update}, $\delta = KM(y - p)$ with $M > 0$ and $0 < p < 1$, so $r_i' > r_i$ on every realization with $Y_1 = 1$ and $r_i' < r_i$ on every realization with $Y_1 = 0$. The rating of $k$ is unaffected by game 1, so the win probability in game 2, $q(r_i') = \lambda\bigl(\beta(r_i' - r_k \pm H_s)\bigr)$ (the sign depending on venue), is strictly increasing in $r_i'$. Hence
+\[
+  \Prob(Y_2 = 1 \mid Y_1 = 1) = \E[q(r_i') \mid Y_1 = 1] > q(r_i) > \E[q(r_i') \mid Y_1 = 0] = \Prob(Y_2 = 1 \mid Y_1 = 0),
+\]
+and $\Cov(Y_1,Y_2) = \Prob(Y_1 = 1)\Prob(Y_1 = 0)\bigl[\Prob(Y_2 = 1\mid Y_1=1) - \Prob(Y_2=1\mid Y_1=0)\bigr] > 0$.
+\end{proof}
+
+\begin{corollary}[Overdispersion]
+Let $W = \sum_j Y_j$ be team $i$'s simulated wins over its remaining games, with $p_j = \Prob(Y_j = 1)$. Then
+\[
+  \Var(W) = \sum_j p_j(1-p_j) + 2\sum_{j<k}\Cov(Y_j, Y_k).
+\]
+With frozen ratings the $Y_j$ are independent and $W$ is Poisson--binomial with variance $\sum_j p_j(1-p_j)$. The dependence established in Proposition~\ref{prop:cov} makes the covariance terms positive for consecutive games, inflating $\Var(W)$.
+\end{corollary}
+
+In practice this thickens the tails of the outcome distribution: long shots receive somewhat higher championship probabilities, and favorites somewhat lower, than under frozen ratings.
+
+\subsection{Regular season, standings, and seeding}
+
+Remaining regular-season games are taken from the league schedule (or, when replaying a past season from a given date, from the games actually played after that date) and simulated in order. Completed games enter the standings as they occurred. When playoff seeds have been set by the league they are used directly. Otherwise, each run ranks teams by winning percentage; ties are broken first by winning percentage in games among the tied teams (the league's first tiebreaker) and then uniformly at random, since later tiebreakers require information a simulation does not generate. The top eight teams qualify.
+
+\subsection{Playoff series}
+
+The current format (2025 onward) consists of a best-of-three first round, best-of-five semifinals, and best-of-seven finals. A best-of-$n$ series is won by the first team to reach $w = \lfloor n/2\rfloor + 1$ wins. The higher seed hosts games according to the patterns HLH, HHLLH, and HHLLHLH respectively.
+
+For series already in progress, simulation begins from the actual score. With frozen ratings, the probability that the higher seed wins from a score of $(u, v)$ satisfies the recursion
+\begin{equation}\label{eq:series}
+  V(u, v) = p_{u+v+1}\,V(u+1, v) + (1 - p_{u+v+1})\,V(u, v+1),
+  \qquad V(w, \cdot) = 1,\quad V(\cdot, w) = 0,
+\end{equation}
+where $p_k$ is the higher seed's win probability in game $k$, which depends on whether game $k$ is played at home or away. For a best-of-three in HLH order, with $p_H$ the higher seed's probability at home and $p_L$ on the road,
+\begin{equation}\label{eq:bo3}
+  V(0,0) = p_H p_L + p_H(1-p_L)p_H + (1-p_H)p_L p_H.
+\end{equation}
+The simulation does not use \eqref{eq:series} directly, because ratings evolve between games (Proposition~\ref{prop:cov}); the recursion serves as a check (Appendix~\ref{app:example}).
+
+The bracket is fixed: the winners of the 1--8 and 4--5 series meet, as do the winners of the 2--7 and 3--6 series, and the higher seed has home court in every round.
+
+\subsection{Estimators and Monte Carlo error}
+
+For an event $A$ (for example, ``team $i$ wins the title''), the estimate from $N$ independent runs is $\hat p_A = N^{-1}\sum_{n=1}^N \ind\{A \text{ occurs in run } n\}$, which is unbiased with standard error
+\begin{equation}\label{eq:mcse}
+  \operatorname{se}(\hat p_A) = \sqrt{p_A(1-p_A)/N}.
+\end{equation}
+For $N = \Nsims$ and $p_A = 0.27$ this is $0.0031$, giving a 95\% interval of about $\pm 0.6$ percentage points. More generally, a half-width of $\varepsilon$ at confidence level $1-\alpha$ requires $N \ge z_{1-\alpha/2}^2\,p_A(1-p_A)/\varepsilon^2 \le z_{1-\alpha/2}^2/(4\varepsilon^2)$. Day-to-day changes smaller than about one percentage point should therefore not be interpreted.
+
+% ===========================================================================
+\section{Forecast updating and prospective evaluation}\label{sec:forecast}
+% ===========================================================================
+
+Each morning the pipeline retrieves new results and rebuilds the database. If games have been played since the last forecast, it re-runs the simulation and appends a snapshot; otherwise nothing is recomputed. A single result changes the probabilities of teams that did not play, since it alters their potential opponents, so the whole league is re-simulated after any new game.
+
+Each snapshot also records the win probability and spread for every scheduled game whose participants are known, \emph{before} the game is played. The most recent such prediction for each game is later scored against its result using \eqref{eq:logloss} and accuracy. Unlike the backtest in Section~\ref{sec:fit}, this evaluation is out of sample by construction: neither the parameters nor the ratings could have been influenced by the outcome being predicted.
+
+% ===========================================================================
+\section{Limitations and extensions}\label{sec:limits}
+% ===========================================================================
+
+\begin{enumerate}
+  \item \textbf{Results only.} Ratings respond only to results. They cannot anticipate injuries, trades, or rest, and they adjust with a lag to abrupt changes in strength. Player-level data are available in the database and could adjust ratings for player availability.
+  \item \textbf{Borrowed constants.} The margin-of-victory constants in \eqref{eq:mov} are taken from an NBA model. They could be re-estimated, for instance by choosing the denominator slope so that the empirical analogue of $M_1 - M_0$ in Proposition~\ref{prop:drift} vanishes.
+  \item \textbf{Gaussian margins.} The diagnostic in Section~\ref{sec:margin} indicates dispersion beyond the Gaussian model. A Student-$t$ margin, or a margin model fitted by maximum likelihood, would address this.
+  \item \textbf{Heuristic uncertainty.} In-simulation rating updates are a heuristic device for representing rating uncertainty. A principled alternative is a dynamic Bradley--Terry or state-space model fitted by filtering and smoothing, from which simulation would draw strengths from the posterior. Glicko \cite{glickman1999} provides a lighter-weight approximation through a per-team rating variance.
+  \item \textbf{Grid search.} Parameters are a grid-search optimum on a single train/test split, not a posterior distribution; rolling-origin validation would give a better estimate of out-of-sample performance.
+  \item \textbf{Home-advantage lag.} Estimating $H_s$ from preceding seasons lags genuine changes, which likely explains the mild miscalibration for home underdogs in Table~\ref{tab:calibration}.
+\end{enumerate}
+
+\appendix
+
+% ===========================================================================
+\section{Parameters and their locations in the code}\label{app:params}
+% ===========================================================================
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+Symbol & Value & Meaning & Source (\texttt{src/wnba/}) \\
+\midrule
+$K$ & \Kval & K-factor & \texttt{elo.py}: \texttt{EloParams.k} \\
+$c$ & \carry & between-season carryover & \texttt{EloParams.carryover} \\
+$r_{\mathrm{new}}$ & \rnew & rating of a new team & \texttt{EloParams.new\_team\_rating} \\
+$\mu$ & \rmean & league mean & \texttt{EloParams.mean} \\
+$W$ & \Hwin & home-advantage window (seasons) & \texttt{EloParams.home\_advantage\_seasons} \\
+$H_{1997}$ & \Hinit & home advantage, no history & \texttt{EloParams.initial\_home\_advantage} \\
+$\sigma$ & \sigmaval & margin s.d.\ (points) & \texttt{elo.py}: \texttt{MARGIN\_SD} \\
+-- & 3, 0.8, 7.5, 0.006 & margin-of-victory constants & \texttt{elo.py}: \texttt{rating\_change} \\
+$N$ & \Nsims & simulations per forecast & \texttt{forecast.py}: \texttt{update\_forecast} \\
+-- & \trainyears & tuning seasons & \texttt{elo.py}: \texttt{TRAIN\_SEASONS} \\
+-- & 2020 & neutral-site seasons & \texttt{elo.py}: \texttt{NEUTRAL\_SEASONS} \\
+\bottomrule
+\end{tabular}
+\caption{Model parameters. The values are also defined as macros at the top of this document's source.}
+\end{table}
+
+Equations \eqref{eq:winprob}--\eqref{eq:update} and \eqref{eq:mov} are implemented in \texttt{win\_prob} and \texttt{rating\_change}; \eqref{eq:carryover} and \eqref{eq:hca} in \texttt{EloState.rating} and \texttt{EloState.home\_advantage}; \eqref{eq:margin} in \texttt{spread} (all in \texttt{src/wnba/elo.py}). Algorithm~\ref{alg:game} is \texttt{GameSimulator.play}, and series and bracket play are \texttt{play\_series} and \texttt{play\_bracket} (in \texttt{src/wnba/simulate.py}). After changing a parameter, run \texttt{wnba backtest} to re-evaluate, or \texttt{wnba backtest --tune} to repeat the grid search.
+
+% ===========================================================================
+\section{A worked example}\label{app:example}
+% ===========================================================================
+
+Consider Game~1 of the 2026 first-round series between Minnesota (seed 1, rating $r_h = 1626$) and New York (seed 8, rating $r_a = 1539$), played in Minnesota with $H_{2026} = 43$.
+
+\paragraph{Win probability and spread.} The edge is $\Delta = 1626 - 1539 + 43 = 130$, so
+\[
+  p = \bigl(1 + 10^{-130/400}\bigr)^{-1} = (1 + 0.4732)^{-1} = 0.679.
+\]
+Then $\Phi^{-1}(0.679) = 0.464$ and the spread is $\mu = \sigmaval \times 0.464 = 5.1$ points in Minnesota's favor.
+
+\paragraph{Updates.} If Minnesota wins by 10, $\Delta_w = 130$ and
+\[
+  M = \frac{13^{0.8}}{7.5 + 0.78} = \frac{7.78}{8.28} = 0.94, \qquad \delta = \Kval \times 0.94 \times (1 - 0.679) = +9.0.
+\]
+If New York wins by 10, $\Delta_w = -130$ and
+\[
+  M = \frac{7.78}{7.5 - 0.78} = 1.16, \qquad \delta = \Kval \times 1.16 \times (0 - 0.679) = -23.6,
+\]
+so Minnesota loses 23.6 points and New York gains them. The upset moves ratings about 2.6 times as much as the expected result with the same margin, as intended by the denominator of \eqref{eq:mov}.
+
+\paragraph{Series probability.} Game~2 is played in New York, where $\Delta = 1539 - 1626 + 43 = -44$, giving New York $p = 0.437$ and Minnesota $p_L = 0.563$. With $p_H = 0.679$, equation \eqref{eq:bo3} gives
+\begin{align*}
+  V(0,0) &= (0.679)(0.563) + (0.679)(0.437)(0.679) + (0.321)(0.563)(0.679)\\
+         &= 0.382 + 0.201 + 0.123 = 0.706.
+\end{align*}
+The simulation, in which ratings evolve between games, estimates that Minnesota advances with probability approximately $0.70$. The agreement to within Monte Carlo error \eqref{eq:mcse} and the small effect of in-simulation updates is a useful consistency check.
+
+\begin{thebibliography}{9}
+\bibitem{bradley1952} R.~A. Bradley and M.~E. Terry. Rank analysis of incomplete block designs: I. The method of paired comparisons. \emph{Biometrika}, 39(3/4):324--345, 1952.
+\bibitem{elo1978} A.~E. Elo. \emph{The Rating of Chessplayers, Past and Present}. Arco, New York, 1978.
+\bibitem{glickman1999} M.~E. Glickman. Parameter estimation in large dynamic paired comparison experiments. \emph{Journal of the Royal Statistical Society: Series C}, 48(3):377--394, 1999.
+\bibitem{silver2015} N.~Silver. How we calculate NBA Elo ratings. \emph{FiveThirtyEight}, May 2015.
+\bibitem{gneiting2007} T.~Gneiting and A.~E. Raftery. Strictly proper scoring rules, prediction, and estimation. \emph{Journal of the American Statistical Association}, 102(477):359--378, 2007.
+\end{thebibliography}
+
+\end{document}

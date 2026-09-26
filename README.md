@@ -6,6 +6,8 @@ It downloads every game since the league's first season (1997) from the stats.wn
 
 **[Live forecast](https://dylan-costa.github.io/wnba-analytics/)**: title odds, next-game predictions, the model's live record, and how well it's calibrated. It's regenerated every morning.
 
+**[Methodology](methodology/methodology.pdf)**: the math behind the ratings, predictions and simulations, with proofs, backtest results and a worked example (LaTeX source in `methodology/`).
+
 ## Quickstart
 
 Requires Python 3.11+. The pipeline itself uses only the standard library.
