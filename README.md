@@ -4,7 +4,7 @@ A WNBA game data pipeline that feeds Monte Carlo simulations and game prediction
 
 It downloads every game since the league's first season (1997) from the stats.wnba.com API, with team and player box scores, checks it, and loads it into a SQLite database. On top of that it rates every team with Elo, predicts games, and runs Monte Carlo simulations of the rest of the season and the playoffs.
 
-**Live forecast:** https://dylan-costa.github.io/wnba-analytics/: title odds, next-game predictions, the model's live record, and how well it's calibrated. It's regenerated every morning.
+**[Live forecast](https://dylan-costa.github.io/wnba-analytics/)**: title odds, next-game predictions, the model's live record, and how well it's calibrated. It's regenerated every morning.
 
 ## Quickstart
 
