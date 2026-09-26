@@ -1,10 +1,10 @@
-"""push_raw_data against a throwaway repo with a local bare "remote"."""
+"""push_data against a throwaway repo with a local bare "remote"."""
 
 import subprocess
 
 import pytest
 
-from wnba.gitsync import push_raw_data
+from wnba.gitsync import push_data
 
 
 def git(repo, *args):
@@ -30,8 +30,8 @@ def repo(tmp_path):
     return work
 
 
-def sync(repo, message="Update game data through 2026-09-26"):
-    return push_raw_data(message, repo=repo, raw_dir=repo / "data" / "raw")
+def sync(repo, message="Update data through 2026-09-26"):
+    return push_data(message, repo=repo, data_dirs=[repo / "data" / "raw", repo / "data" / "forecasts"])
 
 
 def remote_log(repo):
@@ -49,7 +49,7 @@ def test_commits_and_pushes_only_raw_data(repo):
 
     assert sync(repo) == "committed and pushed"
 
-    assert remote_log(repo).splitlines()[0] == "Update game data through 2026-09-26"
+    assert remote_log(repo).splitlines()[0] == "Update data through 2026-09-26"
     assert sorted(git(repo, "show", "--format=", "--name-only", "HEAD").splitlines()) == [
         "data/raw/2026_playoffs.csv", "data/raw/2026_regular.csv",
     ]
@@ -82,4 +82,15 @@ def test_retries_a_failed_push_next_run(repo, tmp_path):
 
     git(repo, "remote", "set-url", "origin", good_url)
     assert sync(repo) == "pushed earlier data commits"
-    assert remote_log(repo).splitlines()[0] == "Update game data through 2026-09-26"
+    assert remote_log(repo).splitlines()[0] == "Update data through 2026-09-26"
+
+
+def test_commits_forecasts_with_raw_data(repo):
+    (repo / "data" / "raw" / "2026_regular.csv").write_text("GAME_ID\n1\n2\n")
+    (repo / "data" / "forecasts").mkdir()
+    (repo / "data" / "forecasts" / "2026_odds.csv").write_text("team,champion\nMIN,0.2\n")
+
+    assert sync(repo) == "committed and pushed"
+    assert sorted(git(repo, "show", "--format=", "--name-only", "HEAD").splitlines()) == [
+        "data/forecasts/2026_odds.csv", "data/raw/2026_regular.csv",
+    ]

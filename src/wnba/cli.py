@@ -1,5 +1,5 @@
 """Command-line entry point. Data: fetch, build, update. Stats: standings, leaders.
-Models: ratings, predict, simulate, backtest."""
+Models: ratings, predict, simulate, forecast, odds, backtest."""
 
 import argparse
 import math
@@ -7,7 +7,7 @@ import traceback
 from contextlib import closing
 from datetime import date, datetime
 
-from wnba import db, elo, fetch, gitsync, predict, simulate
+from wnba import db, elo, fetch, forecast, gitsync, predict, simulate
 from wnba.config import API_SEASON_TYPES, DB_PATH, DEFAULT_SEASON_TYPES, FIRST_SEASON, UPDATE_LOG_PATH
 
 
@@ -51,10 +51,18 @@ def cmd_update(args: argparse.Namespace) -> None:
         for (season, season_type), (n_team, n_player) in fetched.items()
     )
     message = f"ok: {counts['games']:,} games in db (fetched {fetched_summary or 'nothing'})"
+
+    # A forecast problem shouldn't stop the new data from being saved and pushed.
+    with closing(db.connect()) as conn:
+        latest = conn.execute("SELECT MAX(game_date) FROM games").fetchone()[0]
+        try:
+            update = forecast.update_forecast(conn)
+            message += f"; forecast: {forecast.summarize(update) if update else 'no new games, unchanged'}"
+        except Exception:
+            message += f"; forecast FAILED\n{traceback.format_exc()}"
+
     if args.push:
-        with closing(db.connect()) as conn:
-            latest = conn.execute("SELECT MAX(game_date) FROM games").fetchone()[0]
-        message += f"; git: {gitsync.push_raw_data(f'Update game data through {latest}')}"
+        message += f"; git: {gitsync.push_data(f'Update data through {latest}')}"
     log(message)
     print(message)
 
@@ -159,6 +167,48 @@ def cmd_simulate(args: argparse.Namespace) -> None:
         print(f"(Playoffs are only simulated for {simulate.PLAYOFF_FORMAT_SINCE}+, which use the current format.)")
 
 
+def cmd_odds(args: argparse.Namespace) -> None:
+    season, history = forecast.snapshots(args.season)
+    if not history:
+        print("No forecasts yet. They're saved by `wnba update` (or `wnba forecast`) when new games come in.")
+        return
+
+    def prob(value: str) -> str:
+        return _pct(float(value)) if value != "" else "-"
+
+    if args.team:
+        team = args.team.upper()
+        rows = [(snapshot[0]["through_date"], r) for snapshot in history for r in snapshot if r["team"] == team]
+        if not rows:
+            raise SystemExit(f"No {season} forecasts for {team}")
+        print(f"{team} {season} forecast history")
+        print(f"{'Through':<10}  {'W-L':>5} {'Elo':>5}  {'Playoffs':>8} {'Semis':>6} {'Finals':>6} {'Title':>6}")
+        for through, r in rows:
+            print(f"{through:<10}  {r['wins']:>2}-{r['losses']:<2} {float(r['elo']):>5.0f}  {prob(r['playoffs']):>8} "
+                  f"{prob(r['semifinals']):>6} {prob(r['finals']):>6} {prob(r['champion']):>6}")
+        return
+
+    latest = history[-1]
+    previous = {r["team"]: r for r in history[-2]} if len(history) > 1 else {}
+    print(f"{season} forecast through {latest[0]['through_date']} ({len(history)} snapshots"
+          + (f"; changes since {history[-2][0]['through_date']})" if previous else ")"))
+    print(f"{'Team':<5} {'Seed':>4} {'W-L':>5} {'Elo':>5}  {'Playoffs':>8} {'Semis':>6} {'Finals':>6} {'Title':>6} {'Change':>7}")
+    for r in latest:
+        before = previous.get(r["team"])
+        change = ""
+        if before and r["champion"] != "" and before["champion"] != "":
+            delta = float(r["champion"]) - float(before["champion"])
+            change = f"{delta * 100:+.0f} pts" if round(delta * 100) else ""
+        print(f"{r['team']:<5} {r['seed']:>4} {r['wins']:>2}-{r['losses']:<2} {float(r['elo']):>5.0f}  {prob(r['playoffs']):>8} "
+              f"{prob(r['semifinals']):>6} {prob(r['finals']):>6} {prob(r['champion']):>6} {change:>7}")
+
+
+def cmd_forecast(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        update = forecast.update_forecast(conn, sims=args.sims)
+    print(forecast.summarize(update) if update else "No new games since the last forecast; nothing to update.")
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     with closing(db.connect()) as conn:
         games = elo.load_games(conn)
@@ -224,6 +274,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--sims", type=int, default=10_000)
     p.add_argument("--seed", type=int, help="random seed, for repeatable results")
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("forecast", help="save a forecast snapshot if there are new games (wnba update does this too)")
+    p.add_argument("--sims", type=int, default=20_000)
+    p.set_defaults(func=cmd_forecast)
+
+    p = sub.add_parser("odds", help="latest saved forecast and how it changed, or one team's history")
+    p.add_argument("team", nargs="?", help="team abbreviation, e.g. MIN, for its history")
+    p.add_argument("--season", type=int)
+    p.set_defaults(func=cmd_odds)
 
     p = sub.add_parser("backtest", help="score the Elo model's past predictions")
     p.add_argument("--tune", action="store_true", help="also re-run the parameter grid search")

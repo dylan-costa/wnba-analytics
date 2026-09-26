@@ -48,10 +48,10 @@ def predict_game(state: ModelState, home_team_id: int, away_team_id: int, neutra
     return Prediction(home_team_id, away_team_id, p, elo.spread(p))
 
 
-def upcoming_games(conn: sqlite3.Connection, limit: int = 12) -> list[sqlite3.Row]:
-    """Scheduled games whose teams are known, soonest first."""
+def upcoming_games(conn: sqlite3.Connection, limit: int | None = 12) -> list[sqlite3.Row]:
+    """Scheduled games whose teams are known, soonest first (all of them if limit is None)."""
     return conn.execute(
         "SELECT * FROM schedule WHERE home_team_id IS NOT NULL AND away_team_id IS NOT NULL "
         "ORDER BY game_date, game_id LIMIT ?",
-        (limit,),
+        (-1 if limit is None else limit,),
     ).fetchall()

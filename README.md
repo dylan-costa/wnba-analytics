@@ -41,6 +41,8 @@ wnba predict                    # upcoming games: home win probability and sprea
 wnba predict LVA MIN            # any matchup (home team first); add --neutral for no home court
 wnba simulate                   # Monte Carlo odds for the rest of the season and the playoffs
 wnba simulate --season 2025 --as-of 2025-07-15   # replay a past season from a date
+wnba odds                       # latest saved forecast and the change since the one before
+wnba odds MIN                   # one team's odds over time
 wnba backtest                   # how well past predictions held up; --tune re-runs the grid search
 ```
 
@@ -57,11 +59,22 @@ On the held-out seasons, predicted and actual win rates line up within about 2 p
 
 **Monte Carlo** (`simulate.py`). Each simulation plays every remaining game. The home team wins with the Elo probability, the margin is drawn around the spread, and ratings update after each simulated game, so a team that gets hot stays hot for the rest of that simulation. Games already played count as they happened, including playoff games in a series that's under way. Remaining regular-season games come from the league schedule. Playoff seeds come from the schedule once they're set; before that, each simulation seeds the top 8 by record, breaking ties by record among the tied teams and then at random. Playoffs use the current format (2025 onward): best-of-3 first round (higher seed hosts games 1 and 3), best-of-5 semifinals, best-of-7 finals, fixed bracket with 1/8 meeting 4/5. The daily update refreshes the schedule, so `wnba simulate` stays current through the playoffs.
 
+**Forecast history** (`forecast.py`). Every `wnba update` checks for games played since the last forecast. If there are any, it re-runs the simulation (20,000 runs) and appends a snapshot to `data/forecasts/`, which is committed and pushed with the data. If there aren't, nothing is re-run. One result moves every team's odds, because it reshapes the bracket, so the whole league is re-simulated. The update log calls out the teams that just played plus the biggest movers:
+
+```
+forecast: 2 new games (NYL 80 @ MIN 85, DAL 77 @ GSV 90); title odds: MIN 21%->25%, GSV 27%->29%, NYL 4%->2%, DAL 5%->3%
+```
+
+- `{season}_odds.csv`: one row per team per snapshot, with record, Elo, and playoff, semifinal, finals and title odds.
+- `{season}_games.csv`: the home win probability and spread for every upcoming game, recorded before it's played, so the model can later be scored on games it truly hadn't seen.
+
+`wnba forecast` takes a snapshot by hand (same rule: only if there are new games).
+
 **Limits.** Elo only knows results. It can't see injuries, trades, or who's playing tonight, and it lags sudden changes. From mid-July 2025 it gave the eventual champion Aces a 3% title chance before their winning streak. Using player data to adjust for who's actually available is the natural next step.
 
 ## Daily updates
 
-`wnba update` does both steps (fetch the current season, rebuild) and appends the result to `data/update.log`. With `--push` it then commits any changed files in `data/raw` and pushes them to GitHub, so the repo stays current too.
+`wnba update` fetches the current season, rebuilds the database, saves a new forecast if any games were played (see Forecast history above), and appends the result to `data/update.log`. With `--push` it then commits any changed files in `data/raw` and `data/forecasts` and pushes them to GitHub, so the repo stays current too. If the forecast step fails, the error is logged and the new data is still saved and pushed.
 
 To run it automatically every morning on Windows:
 
@@ -75,7 +88,7 @@ The task catches up if the PC was off or asleep at that time and runs on battery
 
 The automatic commits are deliberately cautious:
 
-- Only files under `data/raw` are committed ("Update game data through YYYY-MM-DD"), so anything else you're editing stays out of them.
+- Only files under `data/raw` and `data/forecasts` are committed ("Update data through YYYY-MM-DD"), so anything else you're editing stays out of them.
 - They only happen with `main` checked out. On another branch, that day's commit is skipped.
 - Nothing is pushed if `main` has unpushed commits of your own; the log says to push manually.
 - If a push fails (offline, say), the commit stays local and the next run pushes it.
@@ -95,6 +108,7 @@ Since the task pushes to `main`, run `git pull` before starting work on another 
 data/raw/team_games/      raw API responses: one row per team per game, one CSV per season + season type (committed)
 data/raw/player_games/    same, one row per player per game
 data/raw/schedule/        the current season's schedule: upcoming games and playoff seeds
+data/forecasts/           forecast history: odds and game predictions per snapshot (committed)
 data/wnba.db              SQLite database built from data/raw (gitignored)
 src/wnba/
   fetch.py                stats.wnba.com client
@@ -103,8 +117,9 @@ src/wnba/
   elo.py                  Elo ratings, backtesting and tuning
   predict.py              game predictions from current ratings
   simulate.py             Monte Carlo season and playoff simulation
+  forecast.py             saves a forecast snapshot when new games come in
   cli.py                  `wnba` command
-  gitsync.py              commits and pushes new raw data after `wnba update --push`
+  gitsync.py              commits and pushes new data after `wnba update --push`
   config.py               paths and constants
 scripts/
   schedule_daily_update.ps1   registers the daily `wnba update` task (Windows)

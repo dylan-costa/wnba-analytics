@@ -10,6 +10,7 @@ DATA_DIR = Path(os.environ.get("WNBA_DATA_DIR", REPO_ROOT / "data"))
 RAW_TEAM_GAMES_DIR = DATA_DIR / "raw" / "team_games"
 RAW_PLAYER_GAMES_DIR = DATA_DIR / "raw" / "player_games"
 RAW_SCHEDULE_DIR = DATA_DIR / "raw" / "schedule"
+FORECAST_DIR = DATA_DIR / "forecasts"
 DB_PATH = DATA_DIR / "wnba.db"
 UPDATE_LOG_PATH = DATA_DIR / "update.log"
 
