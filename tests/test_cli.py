@@ -23,6 +23,7 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(cli.db, "connect", connect)
     monkeypatch.setattr(cli.db, "build", lambda: {"games": 7001})
     monkeypatch.setattr(cli.fetch, "fetch_seasons", lambda seasons, types: {(2026, "playoffs"): (8, 80)})
+    monkeypatch.setattr(cli.website, "build_site", lambda conn: True)
 
 
 def test_update_logs_success_and_forecast(log_path, fake_db, monkeypatch):
@@ -33,7 +34,7 @@ def test_update_logs_success_and_forecast(log_path, fake_db, monkeypatch):
 
     assert log_path.read_text().strip().endswith(
         "ok: 7,001 games in db (fetched 2026 playoffs: 8 team/80 player rows); "
-        "forecast: 1 new games (NYL 80 @ MIN 85); title odds: MIN 20%->24%"
+        "forecast: 1 new games (NYL 80 @ MIN 85); title odds: MIN 20%->24%; site: updated"
     )
 
 

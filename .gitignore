@@ -8,3 +8,6 @@ __pycache__/
 data/wnba.db
 data/*.tmp
 data/update.log
+
+# Local preview config
+.claude/launch.json

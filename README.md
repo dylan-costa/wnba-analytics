@@ -4,6 +4,8 @@ A WNBA game data pipeline that feeds Monte Carlo simulations and game prediction
 
 It downloads every game since the league's first season (1997) from the stats.wnba.com API, with team and player box scores, checks it, and loads it into a SQLite database. On top of that it rates every team with Elo, predicts games, and runs Monte Carlo simulations of the rest of the season and the playoffs.
 
+**Live forecast:** https://dylan-costa.github.io/wnba-analytics/: title odds, next-game predictions, the model's live record, and how well it's calibrated. It's regenerated every morning.
+
 ## Quickstart
 
 Requires Python 3.11+. The pipeline itself uses only the standard library.
@@ -70,11 +72,13 @@ forecast: 2 new games (NYL 80 @ MIN 85, DAL 77 @ GSV 90); title odds: MIN 21%->2
 
 `wnba forecast` takes a snapshot by hand (same rule: only if there are new games).
 
+**Website** (`website.py`). `wnba update` also regenerates `docs/index.html`, which GitHub Pages serves (Settings → Pages → Deploy from a branch → `main`, `/docs`). It's one static page with inline SVG charts and no build step. It has no timestamps, so it only changes when the data does. `wnba site` regenerates it by hand; to preview it locally, run `python -m http.server --directory docs`.
+
 **Limits.** Elo only knows results. It can't see injuries, trades, or who's playing tonight, and it lags sudden changes. From mid-July 2025 it gave the eventual champion Aces a 3% title chance before their winning streak. Using player data to adjust for who's actually available is the natural next step.
 
 ## Daily updates
 
-`wnba update` fetches the current season, rebuilds the database, saves a new forecast if any games were played (see Forecast history above), and appends the result to `data/update.log`. With `--push` it then commits any changed files in `data/raw` and `data/forecasts` and pushes them to GitHub, so the repo stays current too. If the forecast step fails, the error is logged and the new data is still saved and pushed.
+`wnba update` fetches the current season, rebuilds the database, saves a new forecast if any games were played (see Forecast history above), and appends the result to `data/update.log`. With `--push` it then commits any changed files in `data/raw`, `data/forecasts` and `docs` and pushes them to GitHub, so the repo stays current too. If the forecast step fails, the error is logged and the new data is still saved and pushed.
 
 To run it automatically every morning on Windows:
 
@@ -88,7 +92,7 @@ The task catches up if the PC was off or asleep at that time and runs on battery
 
 The automatic commits are deliberately cautious:
 
-- Only files under `data/raw` and `data/forecasts` are committed ("Update data through YYYY-MM-DD"), so anything else you're editing stays out of them.
+- Only files under `data/raw`, `data/forecasts` and `docs` are committed ("Update data through YYYY-MM-DD"), so anything else you're editing stays out of them.
 - They only happen with `main` checked out. On another branch, that day's commit is skipped.
 - Nothing is pushed if `main` has unpushed commits of your own; the log says to push manually.
 - If a push fails (offline, say), the commit stays local and the next run pushes it.
@@ -109,6 +113,7 @@ data/raw/team_games/      raw API responses: one row per team per game, one CSV 
 data/raw/player_games/    same, one row per player per game
 data/raw/schedule/        the current season's schedule: upcoming games and playoff seeds
 data/forecasts/           forecast history: odds and game predictions per snapshot (committed)
+docs/                     the generated website, served by GitHub Pages (committed)
 data/wnba.db              SQLite database built from data/raw (gitignored)
 src/wnba/
   fetch.py                stats.wnba.com client
@@ -118,6 +123,7 @@ src/wnba/
   predict.py              game predictions from current ratings
   simulate.py             Monte Carlo season and playoff simulation
   forecast.py             saves a forecast snapshot when new games come in
+  website.py              generates the static forecast site in docs/
   cli.py                  `wnba` command
   gitsync.py              commits and pushes new data after `wnba update --push`
   config.py               paths and constants

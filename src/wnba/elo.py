@@ -184,7 +184,7 @@ def evaluate(rated: list[RatedGame], margin_sd: float | None = None) -> Evaluati
     eps = 1e-12
     outcomes = [1.0 if g.home_margin > 0 else 0.0 for g in rated]
     probs = [min(max(g.home_win_prob, eps), 1 - eps) for g in rated]
-    home_rate = sum(outcomes) / n
+    home_rate = min(max(sum(outcomes) / n, eps), 1 - eps)
     z = [_NORMAL.inv_cdf(p) for p in probs]
     if margin_sd is None:
         margin_sd = sum(g.home_margin * zi for g, zi in zip(rated, z)) / sum(zi * zi for zi in z)

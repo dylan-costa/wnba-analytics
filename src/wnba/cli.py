@@ -7,7 +7,7 @@ import traceback
 from contextlib import closing
 from datetime import date, datetime
 
-from wnba import db, elo, fetch, forecast, gitsync, predict, simulate
+from wnba import db, elo, fetch, forecast, gitsync, predict, simulate, website
 from wnba.config import API_SEASON_TYPES, DB_PATH, DEFAULT_SEASON_TYPES, FIRST_SEASON, UPDATE_LOG_PATH
 
 
@@ -60,6 +60,10 @@ def cmd_update(args: argparse.Namespace) -> None:
             message += f"; forecast: {forecast.summarize(update) if update else 'no new games, unchanged'}"
         except Exception:
             message += f"; forecast FAILED\n{traceback.format_exc()}"
+        try:
+            message += f"; site: {'updated' if website.build_site(conn) else 'unchanged'}"
+        except Exception:
+            message += f"; site FAILED\n{traceback.format_exc()}"
 
     if args.push:
         message += f"; git: {gitsync.push_data(f'Update data through {latest}')}"
@@ -209,6 +213,12 @@ def cmd_forecast(args: argparse.Namespace) -> None:
     print(forecast.summarize(update) if update else "No new games since the last forecast; nothing to update.")
 
 
+def cmd_site(args: argparse.Namespace) -> None:
+    with closing(db.connect()) as conn:
+        changed = website.build_site(conn)
+    print(f"{'Wrote' if changed else 'Unchanged:'} {website.SITE_DIR / 'index.html'}")
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     with closing(db.connect()) as conn:
         games = elo.load_games(conn)
@@ -283,6 +293,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("team", nargs="?", help="team abbreviation, e.g. MIN, for its history")
     p.add_argument("--season", type=int)
     p.set_defaults(func=cmd_odds)
+
+    p = sub.add_parser("site", help="regenerate the forecast website in docs/ (wnba update does this too)")
+    p.set_defaults(func=cmd_site)
 
     p = sub.add_parser("backtest", help="score the Elo model's past predictions")
     p.add_argument("--tune", action="store_true", help="also re-run the parameter grid search")

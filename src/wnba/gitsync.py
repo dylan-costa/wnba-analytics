@@ -4,10 +4,10 @@ import os
 import subprocess
 from pathlib import Path
 
-from wnba.config import DATA_DIR, FORECAST_DIR, REPO_ROOT
+from wnba.config import DATA_DIR, FORECAST_DIR, REPO_ROOT, SITE_DIR
 
 RAW_DIR = DATA_DIR / "raw"
-DATA_DIRS = (RAW_DIR, FORECAST_DIR)
+DATA_DIRS = (RAW_DIR, FORECAST_DIR, SITE_DIR)
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
